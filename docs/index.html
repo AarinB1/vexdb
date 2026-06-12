@@ -491,8 +491,10 @@
     <h1>Nearest-neighbor search, <em>from first principles.</em></h1>
     <p class="sub">
       vexdb is a vector database written from scratch — no <code>faiss</code> bindings,
-      no black boxes. A hand-rolled HNSW graph index, property-tested recall against
-      exact ground truth, and an honest benchmark at the end of every phase.
+      no black boxes. A hand-rolled HNSW graph index, AVX2 distance kernels, payload
+      filtering during traversal, binary snapshots, and an HTTP API — finished with an
+      honest head-to-head against faiss: <em style="color:var(--ink); font-style:normal">recall
+      curves at parity</em>, and the remaining QPS gap measured and explained.
     </p>
     <div class="cta-row">
       <a class="btn btn-solid" href="https://github.com/aarinb1/vexdb">Read the source</a>
@@ -500,8 +502,8 @@
     </div>
     <div class="hero-stats">
       <div class="stat"><div class="num">0.97</div><div class="lbl">recall@10 · 100k vectors</div></div>
-      <div class="stat"><div class="num">24×</div><div class="lbl">faster than brute force</div></div>
-      <div class="stat"><div class="num">2</div><div class="lbl">dependencies in core</div></div>
+      <div class="stat"><div class="num">19.6k</div><div class="lbl">QPS · 39× brute force</div></div>
+      <div class="stat"><div class="num">±0.03</div><div class="lbl">recall vs faiss · same data</div></div>
     </div>
   </div>
 </header>
@@ -534,18 +536,32 @@
         regressions a unit test never would.</p>
       </div>
       <div class="cell reveal">
-        <div class="tag">memory layout</div>
-        <h3>Arena-style graph storage</h3>
-        <p>Nodes live in flat arrays; neighbors are <code>u32</code> indices. Cache-friendly
-        today, and the on-disk format in Phase 3 becomes a straight dump of what is
-        already in memory.</p>
+        <div class="tag">persistence</div>
+        <h3>Hand-rolled binary snapshots</h3>
+        <p>The <code>.vex</code> format: magic bytes, a version field, then the graph arena
+        dumped as flat little-endian arrays. Atomic writes, validated reads — corrupt
+        files fail with a typed error, never a panic.</p>
       </div>
       <div class="cell reveal">
-        <div class="tag">api</div>
-        <h3>One contract, every index</h3>
-        <p>Empty index → zero results. Deletes are tombstones, idempotent, and invisible
-        to search. Swap <code>flat</code> for <code>hnsw</code> without changing a line of
-        error handling.</p>
+        <div class="tag">speed</div>
+        <h3>AVX2 distance kernels</h3>
+        <p>Runtime-detected SIMD for all three metrics, with the scalar versions kept as
+        the correctness oracle in property tests. 2.5× faster index builds, ~2× query
+        throughput.</p>
+      </div>
+      <div class="cell reveal">
+        <div class="tag">filtering</div>
+        <h3>Filters inside the traversal</h3>
+        <p>Payload predicates evaluate <em>during</em> the beam search — non-matching nodes
+        still route the beam but never take result slots, so a 1% filter widens the
+        search instead of starving it.</p>
+      </div>
+      <div class="cell reveal">
+        <div class="tag">serving</div>
+        <h3>A Qdrant-shaped HTTP API</h3>
+        <p>Collections, upserts, filtered search, snapshots — JSON over HTTP with honest
+        status codes, input limits, a read-only mode, and a built-in console at
+        <code>/</code>. The engine stays embeddable; tokio lives in its own crate.</p>
       </div>
     </div>
 
@@ -555,46 +571,49 @@
 <span class="c"># FlatIndex computes ground truth, then HNSW sweeps ef_search</span>
 
 dataset: 100000 synthetic vectors, dim 32, 200 queries, k=10, metric L2
-build:   flat   17.4ms   hnsw(M=16, efc=200)   88.6s
+build:   flat   23.0ms   hnsw(M=16, efc=200)   48.4s
 
  <span class="k">ef_search</span>     <span class="k">recall@k</span>          <span class="k">QPS</span>    <span class="k">vs flat</span>
-      flat        1.000          381       1.0x
-        10        0.431         9122      <span class="g">23.9x</span>
-        40        0.773         3613       9.5x
-       160        0.973         1080       2.8x
-       320        0.995          574       1.5x</pre>
+      flat        1.000          504       1.0x
+        10        0.431        19610      <span class="g">38.9x</span>
+        40        0.773         6930      13.7x
+       160        0.973         1989       3.9x
+       320        0.995         1033       2.0x</pre>
     </div>
   </div>
 </section>
 
 <section id="bench">
   <div class="wrap">
-    <div class="sec-kicker reveal">02 · The tradeoff</div>
-    <h2 class="reveal">Recall is a dial, not a constant.</h2>
+    <div class="sec-kicker reveal">02 · The verdict</div>
+    <h2 class="reveal">At parity with faiss on recall.<br>2× behind on kernels — and we know why.</h2>
     <div class="bench-flex">
       <div class="reveal">
         <table>
           <thead>
-            <tr><th>ef</th><th>recall@10</th><th>qps</th></tr>
+            <tr><th>ef</th><th>vexdb r@10 / qps</th><th>faiss r@10 / qps</th></tr>
           </thead>
           <tbody>
-            <tr><td>10</td><td><span class="bar" style="width:43%"></span>0.431</td><td>9,122</td></tr>
-            <tr><td>20</td><td><span class="bar" style="width:60%"></span>0.602</td><td>5,995</td></tr>
-            <tr><td>40</td><td><span class="bar" style="width:77%"></span>0.773</td><td>3,613</td></tr>
-            <tr><td>80</td><td><span class="bar" style="width:92%"></span>0.916</td><td>1,936</td></tr>
-            <tr><td>160</td><td><span class="bar" style="width:97%"></span>0.973</td><td>1,080</td></tr>
-            <tr><td>320</td><td><span class="bar" style="width:99%"></span>0.995</td><td>574</td></tr>
+            <tr><td>10</td><td><span class="bar" style="width:43%"></span>0.431 / 19,610</td><td>0.459 / 41,351</td></tr>
+            <tr><td>20</td><td><span class="bar" style="width:60%"></span>0.602 / 11,753</td><td>0.630 / 29,235</td></tr>
+            <tr><td>40</td><td><span class="bar" style="width:77%"></span>0.773 / 6,930</td><td>0.801 / 17,608</td></tr>
+            <tr><td>80</td><td><span class="bar" style="width:92%"></span>0.916 / 4,022</td><td>0.933 / 9,628</td></tr>
+            <tr><td>160</td><td><span class="bar" style="width:97%"></span>0.973 / 1,989</td><td>0.986 / 5,190</td></tr>
+            <tr><td>320</td><td><span class="bar" style="width:99%"></span>0.995 / 1,033</td><td>0.998 / 2,624</td></tr>
           </tbody>
         </table>
       </div>
       <div class="bench-note reveal">
-        <p><strong>One knob, the whole curve.</strong> <code>ef_search</code> is the beam
-        width at the bottom layer — turn it up for recall, down for throughput. The table
-        is 100k uniform random vectors at dim 32, scalar kernels, one thread.</p>
-        <p>And an honest footnote: uniform random data is close to the <em>worst</em> case
-        for a graph index, and scalar distance makes brute force artificially cheap to
-        beat. Real embeddings (SIFT1M) and SIMD kernels arrive in later phases — the
-        numbers here are the baseline the story gets measured against.</p>
+        <p><strong>Same data, same parameters, single thread.</strong> 100k vectors ×
+        dim 32, M=16, identical splitmix64 streams — vexdb's HNSW vs faiss's
+        <code>IndexHNSWFlat</code>. Recall within ±0.03 at every ef: the graphs are
+        equivalent, so the algorithm is right.</p>
+        <p>The QPS gap is ~2–2.5× — and the flat baselines (504 vs 1,058 QPS, no graph
+        involved) show it is <em>entirely</em> per-distance cost: faiss's hand-scheduled
+        kernels and prefetching vs our AVX2 loop. For a from-scratch build, "graph at
+        parity, kernels 2× behind" is exactly the gap worth understanding — the full
+        analysis is in <a href="https://github.com/aarinb1/vexdb/blob/main/BENCHMARKS.md"
+        style="color:var(--accent)">BENCHMARKS.md</a>.</p>
       </div>
     </div>
   </div>
@@ -627,46 +646,58 @@ build:   flat   17.4ms   hnsw(M=16, efc=200)   88.6s
         <div class="no">/03</div>
         <div class="what">
           <h3>Persistence</h3>
-          <p>A hand-rolled binary snapshot format — magic bytes, versioning, flat graph
-          arrays — then mmap-backed loading so indexes open instantly.</p>
+          <p>The <code>.vex</code> binary snapshot format — magic bytes, versioning, the
+          graph arena as flat arrays. Atomic saves, validated loads, corruption tests.</p>
         </div>
-        <div class="st now">○ next</div>
+        <div class="st done">● shipped</div>
       </div>
       <div class="phase">
         <div class="no">/04</div>
         <div class="what">
-          <h3>Metadata &amp; filtering</h3>
-          <p>Payloads per vector and filtered traversal during graph search — the approach
-          that degrades gracefully when the filter is selective.</p>
+          <h3>Concurrent reads</h3>
+          <p>Searches are embarrassingly parallel over a frozen index: <code>RwLock</code>
+          collections and a rayon-powered <code>search_batch</code>.</p>
         </div>
-        <div class="st next">○ planned</div>
+        <div class="st done">● shipped</div>
       </div>
       <div class="phase">
-        <div class="no">/05</div>
+        <div class="no">/05–06</div>
         <div class="what">
-          <h3>SIMD kernels</h3>
-          <p>Auto-vectorization first, then AVX2/NEON intrinsics with runtime detection.
-          Scalar versions stay on as the correctness oracle.</p>
+          <h3>The HTTP server</h3>
+          <p>vex-server: a Qdrant-shaped JSON API with collections, upserts, deletes,
+          snapshot lifecycle, input limits, a read-only mode, and a live console at
+          <code>/</code>. Ships in a Docker image.</p>
         </div>
-        <div class="st next">○ planned</div>
-      </div>
-      <div class="phase">
-        <div class="no">/06</div>
-        <div class="what">
-          <h3>Concurrency</h3>
-          <p>Lock-free parallel reads over a frozen graph, then writers — RwLock first,
-          per-node locking as extra credit.</p>
-        </div>
-        <div class="st next">○ planned</div>
+        <div class="st done">● shipped</div>
       </div>
       <div class="phase">
         <div class="no">/07</div>
         <div class="what">
-          <h3>vexdb vs. faiss</h3>
-          <p>The capstone: recall/QPS curves on SIFT1M against faiss and hnswlib, and a
-          write-up of exactly where the gap lives.</p>
+          <h3>Metadata &amp; filtering</h3>
+          <p>JSON payloads per vector and a Qdrant-style filter language (eq / range /
+          in / and / or / not), evaluated during graph traversal so selective filters
+          degrade gracefully.</p>
         </div>
-        <div class="st next">○ planned</div>
+        <div class="st done">● shipped</div>
+      </div>
+      <div class="phase">
+        <div class="no">/08</div>
+        <div class="what">
+          <h3>SIMD kernels</h3>
+          <p>Runtime-detected AVX2+FMA for all three metrics; scalar versions kept as the
+          property-test oracle. 2.5× faster builds, ~2× query throughput.</p>
+        </div>
+        <div class="st done">● shipped</div>
+      </div>
+      <div class="phase">
+        <div class="no">/09</div>
+        <div class="what">
+          <h3>vexdb vs. faiss</h3>
+          <p>The capstone: identical data, identical parameters, single thread. Recall at
+          parity; the 2× QPS gap isolated to distance-kernel throughput and written up
+          honestly in BENCHMARKS.md.</p>
+        </div>
+        <div class="st done">● shipped</div>
       </div>
     </div>
   </div>

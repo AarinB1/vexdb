@@ -1,0 +1,6 @@
+target
+data
+docs
+benches/*.py
+.git
+*.vex

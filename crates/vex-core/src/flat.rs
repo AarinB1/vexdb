@@ -4,6 +4,7 @@ use std::collections::{BinaryHeap, HashMap};
 use crate::distance::DistanceMetric;
 use crate::error::{Result, VexError};
 use crate::index::{Index, SearchResult};
+use crate::payload::{Filter, Payload};
 use crate::vector::{Vector, VectorId};
 
 /// Brute-force flat index: linear scan over every vector for each query.
@@ -12,15 +13,16 @@ use crate::vector::{Vector, VectorId};
 /// lookup and removal. Removal uses `swap_remove` to keep storage contiguous;
 /// the swapped entry's id has its position updated in the map.
 pub struct FlatIndex {
-    metric: DistanceMetric,
-    dim: usize,
-    entries: Vec<Entry>,
-    id_to_pos: HashMap<VectorId, usize>,
+    pub(crate) metric: DistanceMetric,
+    pub(crate) dim: usize,
+    pub(crate) entries: Vec<Entry>,
+    pub(crate) id_to_pos: HashMap<VectorId, usize>,
 }
 
-struct Entry {
-    id: VectorId,
-    vector: Vector,
+pub(crate) struct Entry {
+    pub(crate) id: VectorId,
+    pub(crate) vector: Vector,
+    pub(crate) payload: Option<Payload>,
 }
 
 impl FlatIndex {
@@ -43,7 +45,12 @@ impl FlatIndex {
 }
 
 impl Index for FlatIndex {
-    fn add(&mut self, id: VectorId, vector: Vector) -> Result<()> {
+    fn add_with_payload(
+        &mut self,
+        id: VectorId,
+        vector: Vector,
+        payload: Option<Payload>,
+    ) -> Result<()> {
         if vector.dim() != self.dim {
             return Err(VexError::DimensionMismatch {
                 expected: self.dim,
@@ -54,7 +61,11 @@ impl Index for FlatIndex {
             return Err(VexError::DuplicateId(id));
         }
         let pos = self.entries.len();
-        self.entries.push(Entry { id, vector });
+        self.entries.push(Entry {
+            id,
+            vector,
+            payload,
+        });
         self.id_to_pos.insert(id, pos);
         Ok(())
     }
@@ -72,7 +83,12 @@ impl Index for FlatIndex {
         Ok(true)
     }
 
-    fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
+    fn search_filtered(
+        &self,
+        query: &[f32],
+        k: usize,
+        filter: Option<&Filter>,
+    ) -> Result<Vec<SearchResult>> {
         if k == 0 {
             return Err(VexError::InvalidK);
         }
@@ -100,6 +116,11 @@ impl Index for FlatIndex {
         let mut heap: BinaryHeap<HeapItem> = BinaryHeap::with_capacity(cap);
 
         for entry in &self.entries {
+            if let Some(f) = filter {
+                if !f.matches(entry.payload.as_ref()) {
+                    continue;
+                }
+            }
             let d = self.metric.distance(query, entry.vector.as_slice())?;
             let item = HeapItem {
                 distance: d,
@@ -125,6 +146,12 @@ impl Index for FlatIndex {
                 distance: h.distance,
             })
             .collect())
+    }
+
+    fn payload(&self, id: VectorId) -> Option<&Payload> {
+        self.id_to_pos
+            .get(&id)
+            .and_then(|&pos| self.entries[pos].payload.as_ref())
     }
 
     fn len(&self) -> usize {
@@ -168,6 +195,7 @@ impl PartialOrd for HeapItem {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+    use serde_json::json;
 
     fn v(xs: &[f32]) -> Vector {
         Vector::from_vec(xs.to_vec())
@@ -262,6 +290,43 @@ mod tests {
         idx.add(VectorId(2), v(&[0.0, 1.0])).unwrap();
         let res = idx.search(&[0.0, 0.0], 10).unwrap();
         assert_eq!(res.len(), 2);
+    }
+
+    #[test]
+    fn payload_stored_and_retrieved() {
+        let mut idx = FlatIndex::new(2, DistanceMetric::L2);
+        idx.add_with_payload(VectorId(1), v(&[1.0, 0.0]), Some(json!({"tag": "a"})))
+            .unwrap();
+        idx.add(VectorId(2), v(&[0.0, 1.0])).unwrap();
+        assert_eq!(idx.payload(VectorId(1)), Some(&json!({"tag": "a"})));
+        assert_eq!(idx.payload(VectorId(2)), None);
+        assert_eq!(idx.payload(VectorId(99)), None);
+    }
+
+    #[test]
+    fn filtered_search_only_returns_matches() {
+        let mut idx = FlatIndex::new(2, DistanceMetric::L2);
+        for i in 0..10u64 {
+            let cat = if i % 2 == 0 { "even" } else { "odd" };
+            idx.add_with_payload(
+                VectorId(i),
+                v(&[i as f32, 0.0]),
+                Some(json!({"cat": cat, "n": i})),
+            )
+            .unwrap();
+        }
+        let f = Filter::Eq {
+            key: "cat".into(),
+            value: json!("even"),
+        };
+        let res = idx.search_filtered(&[0.0, 0.0], 3, Some(&f)).unwrap();
+        assert_eq!(res.len(), 3);
+        for r in &res {
+            assert_eq!(r.id.0 % 2, 0, "non-matching id {} surfaced", r.id);
+        }
+        // Closest evens are 0, 2, 4.
+        let ids: Vec<u64> = res.iter().map(|r| r.id.0).collect();
+        assert_eq!(ids, vec![0, 2, 4]);
     }
 
     proptest! {

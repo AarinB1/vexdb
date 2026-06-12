@@ -1,21 +1,30 @@
 [workspace]
 resolver = "2"
-members = ["crates/vex-core", "crates/vex-cli"]
+members = ["crates/vex-core", "crates/vex-cli", "crates/vex-server"]
 
 [workspace.package]
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/aarinb1/vexdb"
-rust-version = "1.75"
+rust-version = "1.82"
 
 [workspace.dependencies]
 thiserror = "1.0"
 anyhow = "1.0"
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.5", features = ["derive", "env"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 proptest = "1.4"
 criterion = "0.5"
+rayon = "1.10"
+tempfile = "3.10"
+axum = "0.7"
+tokio = { version = "1.38", features = ["rt-multi-thread", "macros", "signal", "time"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["trace", "limit"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+http-body-util = "0.1"
 vex-core = { path = "crates/vex-core" }
 
 [profile.release]

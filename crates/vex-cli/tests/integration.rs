@@ -76,3 +76,61 @@ fn ingest_and_query_round_trip() {
         .expect("id=1 in output");
     assert!(first_line.contains("distance=0"), "got: {first_line}");
 }
+
+#[test]
+fn build_snapshot_and_query_round_trip() {
+    let jsonl = "\
+{\"id\": 1, \"vector\": [1.0, 0.0, 0.0], \"payload\": {\"tag\": \"x\"}}
+{\"id\": 2, \"vector\": [0.0, 1.0, 0.0]}
+{\"id\": 3, \"vector\": [0.0, 0.0, 1.0]}
+";
+    let f = write_jsonl(jsonl);
+    let dir = tempfile::tempdir().unwrap();
+    let snap = dir.path().join("index.vex");
+
+    let out = Command::new(cli_bin())
+        .args([
+            "build",
+            "--input",
+            f.path().to_str().unwrap(),
+            "--output",
+            snap.to_str().unwrap(),
+            "--dim",
+            "3",
+            "--index",
+            "hnsw",
+        ])
+        .output()
+        .expect("running vex build");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("built hnsw index: 3 vectors"),
+        "stdout: {stdout}"
+    );
+    assert!(snap.exists());
+
+    let out = Command::new(cli_bin())
+        .args([
+            "query",
+            "--snapshot",
+            snap.to_str().unwrap(),
+            "--query",
+            "0.0,1.0,0.0",
+            "--k",
+            "1",
+        ])
+        .output()
+        .expect("running vex query --snapshot");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("id=2"), "stdout: {stdout}");
+}
