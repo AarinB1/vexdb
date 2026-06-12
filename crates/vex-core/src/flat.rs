@@ -82,8 +82,11 @@ impl Index for FlatIndex {
                 actual: query.len(),
             });
         }
+        // An empty index is not an error: there are simply zero results. This
+        // matches the "k > len() clamps" philosophy and is the contract every
+        // index implementation follows (see the `Index` trait docs).
         if self.entries.is_empty() {
-            return Err(VexError::EmptyIndex);
+            return Ok(Vec::new());
         }
 
         // Max-heap of size k holding the *current* k smallest distances.
@@ -216,12 +219,9 @@ mod tests {
     }
 
     #[test]
-    fn search_empty_index_errors() {
+    fn search_empty_index_returns_no_results() {
         let idx = FlatIndex::new(2, DistanceMetric::L2);
-        assert_eq!(
-            idx.search(&[0.0, 0.0], 1).unwrap_err(),
-            VexError::EmptyIndex
-        );
+        assert!(idx.search(&[0.0, 0.0], 1).unwrap().is_empty());
     }
 
     #[test]

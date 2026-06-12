@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>vexdb — a vector database from first principles</title>
+<meta name="description" content="A vector database written in Rust, from scratch. Hand-rolled HNSW, property-tested recall, benchmarked against brute force — built in public, phase by phase.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&family=JetBrains+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #08070b;
+    --bg-raise: #0e0d13;
+    --ink: #ece9e2;
+    --ink-dim: #9b97a8;
+    --ink-faint: #5d5a6b;
+    --line: rgba(236, 233, 226, 0.08);
+    --accent: #c8b8ff;
+    --accent-2: #7ef0d4;
+    --glow: rgba(200, 184, 255, 0.35);
+    --serif: "Instrument Serif", Georgia, serif;
+    --sans: "Inter", system-ui, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  ::selection { background: var(--accent); color: var(--bg); }
+
+  /* ---- film grain ---- */
+  body::after {
+    content: "";
+    position: fixed;
+    inset: -50%;
+    width: 200%;
+    height: 200%;
+    pointer-events: none;
+    z-index: 50;
+    opacity: 0.05;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    animation: grain 9s steps(6) infinite;
+  }
+  @keyframes grain {
+    0%, 100% { transform: translate(0, 0); }
+    20% { transform: translate(-3%, 2%); }
+    40% { transform: translate(2%, -3%); }
+    60% { transform: translate(-2%, -2%); }
+    80% { transform: translate(3%, 3%); }
+  }
+
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+
+  /* ---- nav ---- */
+  nav {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 40;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    background: linear-gradient(rgba(8, 7, 11, 0.85), rgba(8, 7, 11, 0.55));
+    border-bottom: 1px solid var(--line);
+  }
+  .nav-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 60px;
+  }
+  .logo {
+    font-family: var(--mono);
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--ink);
+    text-decoration: none;
+    letter-spacing: 0.02em;
+  }
+  .logo .tick { color: var(--accent-2); }
+  .nav-links { display: flex; gap: 28px; align-items: center; }
+  .nav-links a {
+    color: var(--ink-dim);
+    text-decoration: none;
+    font-size: 13.5px;
+    transition: color 0.2s;
+  }
+  .nav-links a:hover { color: var(--ink); }
+  .nav-gh {
+    font-family: var(--mono);
+    font-size: 12.5px !important;
+    border: 1px solid var(--line);
+    padding: 7px 14px;
+    border-radius: 100px;
+    transition: border-color 0.2s, color 0.2s, background 0.2s;
+  }
+  .nav-gh:hover { border-color: var(--accent); background: rgba(200, 184, 255, 0.06); }
+
+  /* ---- hero ---- */
+  header {
+    position: relative;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    overflow: hidden;
+  }
+  #graph {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0.85;
+  }
+  header::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(ellipse 70% 55% at 70% 35%, rgba(124, 96, 220, 0.16), transparent 65%),
+      radial-gradient(ellipse 50% 45% at 20% 80%, rgba(46, 160, 140, 0.10), transparent 70%);
+    pointer-events: none;
+  }
+  header::after {
+    content: "";
+    position: absolute;
+    inset: auto 0 0 0;
+    height: 35vh;
+    background: linear-gradient(transparent, var(--bg));
+    pointer-events: none;
+  }
+  .hero {
+    position: relative;
+    z-index: 2;
+    padding-top: 100px;
+    pointer-events: none;
+  }
+  .hero > * { pointer-events: auto; }
+  .kicker {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--accent-2);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    margin-bottom: 26px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .kicker::before {
+    content: "";
+    width: 28px; height: 1px;
+    background: var(--accent-2);
+    opacity: 0.6;
+  }
+  h1 {
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: clamp(46px, 7.4vw, 96px);
+    line-height: 1.02;
+    letter-spacing: -0.015em;
+    max-width: 13ch;
+  }
+  h1 em {
+    font-style: italic;
+    background: linear-gradient(105deg, var(--accent) 20%, var(--accent-2) 90%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .sub {
+    margin-top: 28px;
+    max-width: 56ch;
+    color: var(--ink-dim);
+    font-size: clamp(15px, 1.6vw, 17.5px);
+  }
+  .sub code {
+    font-family: var(--mono);
+    font-size: 0.88em;
+    color: var(--ink);
+    background: rgba(236, 233, 226, 0.07);
+    padding: 1px 6px;
+    border-radius: 5px;
+  }
+  .cta-row { margin-top: 40px; display: flex; gap: 14px; flex-wrap: wrap; }
+  .btn {
+    font-family: var(--mono);
+    font-size: 13.5px;
+    text-decoration: none;
+    padding: 13px 26px;
+    border-radius: 100px;
+    transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s, border-color 0.18s;
+  }
+  .btn-solid {
+    background: var(--ink);
+    color: var(--bg);
+    font-weight: 500;
+  }
+  .btn-solid:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 32px var(--glow);
+  }
+  .btn-ghost {
+    color: var(--ink);
+    border: 1px solid rgba(236, 233, 226, 0.22);
+  }
+  .btn-ghost:hover { border-color: var(--accent); background: rgba(200, 184, 255, 0.06); }
+
+  .hero-stats {
+    margin-top: 72px;
+    display: flex;
+    gap: 48px;
+    flex-wrap: wrap;
+  }
+  .stat .num {
+    font-family: var(--serif);
+    font-size: 34px;
+    line-height: 1.1;
+  }
+  .stat .lbl {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--ink-faint);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-top: 4px;
+  }
+
+  /* ---- sections ---- */
+  section { padding: 110px 0; position: relative; }
+  .sec-kicker {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink-faint);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    margin-bottom: 18px;
+  }
+  h2 {
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: clamp(32px, 4.4vw, 52px);
+    line-height: 1.1;
+    letter-spacing: -0.01em;
+    max-width: 22ch;
+  }
+  .sec-sub { margin-top: 18px; color: var(--ink-dim); max-width: 60ch; }
+
+  /* ---- features ---- */
+  .grid {
+    margin-top: 56px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    overflow: hidden;
+  }
+  .cell {
+    background: var(--bg);
+    padding: 32px 28px;
+    position: relative;
+    transition: background 0.3s;
+  }
+  .cell:hover { background: var(--bg-raise); }
+  .cell::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 28px; right: 28px;
+    height: 1px;
+    background: linear-gradient(90deg, var(--accent), transparent);
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  .cell:hover::before { opacity: 0.7; }
+  .cell .tag {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent-2);
+    letter-spacing: 0.1em;
+  }
+  .cell h3 {
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: 23px;
+    margin: 14px 0 10px;
+  }
+  .cell p { color: var(--ink-dim); font-size: 14px; }
+  .cell code {
+    font-family: var(--mono);
+    font-size: 0.9em;
+    color: var(--ink);
+  }
+
+  /* ---- terminal ---- */
+  .term {
+    margin-top: 56px;
+    background: #0b0a10;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 30px 80px -30px rgba(0, 0, 0, 0.8), 0 0 60px -40px var(--glow);
+  }
+  .term-bar {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 13px 18px;
+    border-bottom: 1px solid var(--line);
+  }
+  .term-bar i {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: rgba(236, 233, 226, 0.12);
+  }
+  .term-bar span {
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--ink-faint);
+  }
+  .term pre {
+    padding: 26px 26px 30px;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.75;
+    overflow-x: auto;
+    color: var(--ink-dim);
+  }
+  .term .p { color: var(--accent-2); }
+  .term .c { color: var(--ink-faint); font-style: italic; }
+  .term .k { color: var(--accent); }
+  .term .o { color: var(--ink); }
+  .term .g { color: #8fe6a0; }
+
+  /* ---- bench table ---- */
+  .bench-flex {
+    margin-top: 56px;
+    display: grid;
+    grid-template-columns: 1.1fr 0.9fr;
+    gap: 48px;
+    align-items: center;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--mono);
+    font-size: 13px;
+  }
+  th {
+    text-align: right;
+    font-weight: 400;
+    color: var(--ink-faint);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 0 14px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  td {
+    text-align: right;
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--line);
+    color: var(--ink-dim);
+  }
+  tr:hover td { color: var(--ink); }
+  td .bar {
+    display: inline-block;
+    height: 4px;
+    border-radius: 4px;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    vertical-align: middle;
+    margin-right: 8px;
+  }
+  .bench-note { color: var(--ink-dim); font-size: 14.5px; }
+  .bench-note strong { color: var(--ink); font-weight: 600; }
+  .bench-note p + p { margin-top: 14px; }
+
+  /* ---- roadmap ---- */
+  .phases { margin-top: 56px; border-top: 1px solid var(--line); }
+  .phase {
+    display: grid;
+    grid-template-columns: 90px 1fr 110px;
+    gap: 24px;
+    align-items: baseline;
+    padding: 26px 8px;
+    border-bottom: 1px solid var(--line);
+    transition: background 0.25s, padding-left 0.25s;
+  }
+  .phase:hover { background: var(--bg-raise); padding-left: 18px; }
+  .phase .no {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink-faint);
+  }
+  .phase .what h3 {
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: 22px;
+  }
+  .phase .what p {
+    color: var(--ink-dim);
+    font-size: 13.5px;
+    margin-top: 4px;
+    max-width: 62ch;
+  }
+  .phase .st {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    text-align: right;
+  }
+  .st.done { color: var(--accent-2); }
+  .st.now { color: var(--accent); }
+  .st.next { color: var(--ink-faint); }
+
+  /* ---- closer ---- */
+  .closer { text-align: center; padding: 140px 0 120px; }
+  .closer h2 { margin: 0 auto; }
+  .closer .cta-row { justify-content: center; }
+
+  footer {
+    border-top: 1px solid var(--line);
+    padding: 36px 0 44px;
+  }
+  .foot {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 16px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink-faint);
+  }
+  .foot a { color: var(--ink-dim); text-decoration: none; }
+  .foot a:hover { color: var(--ink); }
+
+  /* ---- reveal on scroll ---- */
+  .reveal {
+    opacity: 0;
+    transform: translateY(24px);
+    transition: opacity 0.7s cubic-bezier(0.2, 0.6, 0.2, 1), transform 0.7s cubic-bezier(0.2, 0.6, 0.2, 1);
+  }
+  .reveal.in { opacity: 1; transform: none; }
+
+  @media (max-width: 760px) {
+    .bench-flex { grid-template-columns: 1fr; }
+    .phase { grid-template-columns: 48px 1fr; }
+    .phase .st { grid-column: 2; text-align: left; margin-top: 6px; }
+    .nav-links a:not(.nav-gh) { display: none; }
+    .hero-stats { gap: 28px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    body::after { animation: none; }
+    .reveal { transition: none; opacity: 1; transform: none; }
+    html { scroll-behavior: auto; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap nav-inner">
+    <a class="logo" href="#"><span class="tick">▲</span> vexdb</a>
+    <div class="nav-links">
+      <a href="#how">How it works</a>
+      <a href="#bench">Benchmarks</a>
+      <a href="#roadmap">Roadmap</a>
+      <a class="nav-gh" href="https://github.com/aarinb1/vexdb">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
+
+<header>
+  <canvas id="graph"></canvas>
+  <div class="wrap hero">
+    <div class="kicker">A vector database in Rust · built in public</div>
+    <h1>Nearest-neighbor search, <em>from first principles.</em></h1>
+    <p class="sub">
+      vexdb is a vector database written from scratch — no <code>faiss</code> bindings,
+      no black boxes. A hand-rolled HNSW graph index, property-tested recall against
+      exact ground truth, and an honest benchmark at the end of every phase.
+    </p>
+    <div class="cta-row">
+      <a class="btn btn-solid" href="https://github.com/aarinb1/vexdb">Read the source</a>
+      <a class="btn btn-ghost" href="#how">How it works ↓</a>
+    </div>
+    <div class="hero-stats">
+      <div class="stat"><div class="num">0.97</div><div class="lbl">recall@10 · 100k vectors</div></div>
+      <div class="stat"><div class="num">24×</div><div class="lbl">faster than brute force</div></div>
+      <div class="stat"><div class="num">2</div><div class="lbl">dependencies in core</div></div>
+    </div>
+  </div>
+</header>
+
+<section id="how">
+  <div class="wrap">
+    <div class="sec-kicker reveal">01 · The index</div>
+    <h2 class="reveal">A small world, stacked in layers.</h2>
+    <p class="sec-sub reveal">
+      The graph drifting behind the headline is the real algorithm. HNSW keeps every
+      vector in a bottom-layer proximity graph, with exponentially sparser layers above
+      it. A query enters at the top, greedily hops toward its target through the sparse
+      layers, then runs a beam search of width <em>ef</em> through the dense bottom layer
+      — visiting a few hundred vectors instead of all of them.
+    </p>
+
+    <div class="grid">
+      <div class="cell reveal">
+        <div class="tag">paper → code</div>
+        <h3>Malkov &amp; Yashunin, hand-rolled</h3>
+        <p>Level sampling, greedy descent, ef-bounded beam search, and the Algorithm 4
+        neighbor heuristic with <code>keepPrunedConnections</code> — implemented from the
+        2018 paper, not ported from a library.</p>
+      </div>
+      <div class="cell reveal">
+        <div class="tag">correctness</div>
+        <h3>Recall as a property test</h3>
+        <p>Every build is checked against <code>FlatIndex</code> — exact brute force, recall
+        1.0 by definition. Proptest invariants plus a recall@10 floor catch structural
+        regressions a unit test never would.</p>
+      </div>
+      <div class="cell reveal">
+        <div class="tag">memory layout</div>
+        <h3>Arena-style graph storage</h3>
+        <p>Nodes live in flat arrays; neighbors are <code>u32</code> indices. Cache-friendly
+        today, and the on-disk format in Phase 3 becomes a straight dump of what is
+        already in memory.</p>
+      </div>
+      <div class="cell reveal">
+        <div class="tag">api</div>
+        <h3>One contract, every index</h3>
+        <p>Empty index → zero results. Deletes are tombstones, idempotent, and invisible
+        to search. Swap <code>flat</code> for <code>hnsw</code> without changing a line of
+        error handling.</p>
+      </div>
+    </div>
+
+    <div class="term reveal">
+      <div class="term-bar"><i></i><i></i><i></i><span>vex — zsh</span></div>
+      <pre><span class="p">$</span> <span class="o">vex bench --n 100000 --dim 32 --k 10</span>
+<span class="c"># FlatIndex computes ground truth, then HNSW sweeps ef_search</span>
+
+dataset: 100000 synthetic vectors, dim 32, 200 queries, k=10, metric L2
+build:   flat   17.4ms   hnsw(M=16, efc=200)   88.6s
+
+ <span class="k">ef_search</span>     <span class="k">recall@k</span>          <span class="k">QPS</span>    <span class="k">vs flat</span>
+      flat        1.000          381       1.0x
+        10        0.431         9122      <span class="g">23.9x</span>
+        40        0.773         3613       9.5x
+       160        0.973         1080       2.8x
+       320        0.995          574       1.5x</pre>
+    </div>
+  </div>
+</section>
+
+<section id="bench">
+  <div class="wrap">
+    <div class="sec-kicker reveal">02 · The tradeoff</div>
+    <h2 class="reveal">Recall is a dial, not a constant.</h2>
+    <div class="bench-flex">
+      <div class="reveal">
+        <table>
+          <thead>
+            <tr><th>ef</th><th>recall@10</th><th>qps</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>10</td><td><span class="bar" style="width:43%"></span>0.431</td><td>9,122</td></tr>
+            <tr><td>20</td><td><span class="bar" style="width:60%"></span>0.602</td><td>5,995</td></tr>
+            <tr><td>40</td><td><span class="bar" style="width:77%"></span>0.773</td><td>3,613</td></tr>
+            <tr><td>80</td><td><span class="bar" style="width:92%"></span>0.916</td><td>1,936</td></tr>
+            <tr><td>160</td><td><span class="bar" style="width:97%"></span>0.973</td><td>1,080</td></tr>
+            <tr><td>320</td><td><span class="bar" style="width:99%"></span>0.995</td><td>574</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="bench-note reveal">
+        <p><strong>One knob, the whole curve.</strong> <code>ef_search</code> is the beam
+        width at the bottom layer — turn it up for recall, down for throughput. The table
+        is 100k uniform random vectors at dim 32, scalar kernels, one thread.</p>
+        <p>And an honest footnote: uniform random data is close to the <em>worst</em> case
+        for a graph index, and scalar distance makes brute force artificially cheap to
+        beat. Real embeddings (SIFT1M) and SIMD kernels arrive in later phases — the
+        numbers here are the baseline the story gets measured against.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="roadmap">
+  <div class="wrap">
+    <div class="sec-kicker reveal">03 · The plan</div>
+    <h2 class="reveal">Built in phases, each with a "done when."</h2>
+    <div class="phases reveal">
+      <div class="phase">
+        <div class="no">/01</div>
+        <div class="what">
+          <h3>Foundation</h3>
+          <p>Core types, three distance metrics under one "smaller is closer" convention,
+          brute-force FlatIndex with bounded-heap top-k, property tests, CI.</p>
+        </div>
+        <div class="st done">● shipped</div>
+      </div>
+      <div class="phase">
+        <div class="no">/02</div>
+        <div class="what">
+          <h3>HNSW</h3>
+          <p>The layered graph index, recall tests against exact ground truth, criterion
+          baselines, and a <code>vex bench</code> harness that prints the recall/QPS curve.</p>
+        </div>
+        <div class="st done">● shipped</div>
+      </div>
+      <div class="phase">
+        <div class="no">/03</div>
+        <div class="what">
+          <h3>Persistence</h3>
+          <p>A hand-rolled binary snapshot format — magic bytes, versioning, flat graph
+          arrays — then mmap-backed loading so indexes open instantly.</p>
+        </div>
+        <div class="st now">○ next</div>
+      </div>
+      <div class="phase">
+        <div class="no">/04</div>
+        <div class="what">
+          <h3>Metadata &amp; filtering</h3>
+          <p>Payloads per vector and filtered traversal during graph search — the approach
+          that degrades gracefully when the filter is selective.</p>
+        </div>
+        <div class="st next">○ planned</div>
+      </div>
+      <div class="phase">
+        <div class="no">/05</div>
+        <div class="what">
+          <h3>SIMD kernels</h3>
+          <p>Auto-vectorization first, then AVX2/NEON intrinsics with runtime detection.
+          Scalar versions stay on as the correctness oracle.</p>
+        </div>
+        <div class="st next">○ planned</div>
+      </div>
+      <div class="phase">
+        <div class="no">/06</div>
+        <div class="what">
+          <h3>Concurrency</h3>
+          <p>Lock-free parallel reads over a frozen graph, then writers — RwLock first,
+          per-node locking as extra credit.</p>
+        </div>
+        <div class="st next">○ planned</div>
+      </div>
+      <div class="phase">
+        <div class="no">/07</div>
+        <div class="what">
+          <h3>vexdb vs. faiss</h3>
+          <p>The capstone: recall/QPS curves on SIFT1M against faiss and hnswlib, and a
+          write-up of exactly where the gap lives.</p>
+        </div>
+        <div class="st next">○ planned</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="closer">
+  <div class="wrap">
+    <div class="sec-kicker reveal">04 · Follow along</div>
+    <h2 class="reveal">The best way to understand a database<br>is to <em style="font-style:italic">build one.</em></h2>
+    <div class="cta-row reveal" style="margin-top: 44px;">
+      <a class="btn btn-solid" href="https://github.com/aarinb1/vexdb">Star on GitHub</a>
+      <a class="btn btn-ghost" href="https://github.com/aarinb1/vexdb#readme">Read the phase notes</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot">
+    <div><span style="color:var(--accent-2)">▲</span> vexdb — MIT licensed</div>
+    <div><a href="https://github.com/aarinb1/vexdb">github.com/aarinb1/vexdb</a></div>
+  </div>
+</footer>
+
+<script>
+/* ---- HNSW layer graph: ambient drift + animated greedy searches ---- */
+(() => {
+  const canvas = document.getElementById("graph");
+  const ctx = canvas.getContext("2d");
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let W, H, dpr;
+
+  function resize() {
+    dpr = Math.min(devicePixelRatio || 1, 2);
+    W = canvas.clientWidth;
+    H = canvas.clientHeight;
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  resize();
+  addEventListener("resize", () => { resize(); build(); });
+
+  let nodes = [], edges = [];
+
+  function build() {
+    nodes = []; edges = [];
+    // Three layers, exponentially sparser going up — like the real index.
+    const counts = [Math.floor(W * H / 26000) + 26, 14, 5];
+    const bands = [[0.25, 1.0], [0.12, 0.72], [0.05, 0.45]]; // vertical band per layer (top of page = top layer)
+    counts.forEach((n, layer) => {
+      for (let i = 0; i < n; i++) {
+        nodes.push({
+          layer,
+          x: Math.random() * W,
+          y: (bands[layer][0] + Math.random() * (bands[layer][1] - bands[layer][0])) * H,
+          dx: (Math.random() - 0.5) * 0.12,
+          dy: (Math.random() - 0.5) * 0.08,
+          r: layer === 0 ? 1.4 : layer === 1 ? 2.2 : 3.0,
+        });
+      }
+    });
+    // kNN edges within each layer
+    const K = [3, 3, 2];
+    nodes.forEach((a, ai) => {
+      const near = nodes
+        .map((b, bi) => ({ bi, d: b.layer === a.layer && bi !== ai ? Math.hypot(a.x - b.x, a.y - b.y) : Infinity }))
+        .sort((p, q) => p.d - q.d)
+        .slice(0, K[a.layer]);
+      near.forEach(({ bi, d }) => {
+        if (d < Infinity && !edges.some(e => (e.a === bi && e.b === ai)))
+          edges.push({ a: ai, b: bi, layer: a.layer });
+      });
+    });
+  }
+  build();
+
+  /* A "search": descend layer 2 → 1 → 0 greedily toward a random target. */
+  let search = null;
+  function newSearch() {
+    const targets = nodes.filter(n => n.layer === 0);
+    const target = targets[Math.floor(Math.random() * targets.length)];
+    const path = [];
+    let cur = nodes.filter(n => n.layer === 2)[0];
+    for (let layer = 2; layer >= 0; layer--) {
+      // drop to nearest node on this layer
+      let best = null, bd = Infinity;
+      nodes.forEach(n => {
+        if (n.layer !== layer) return;
+        const d = Math.hypot(n.x - cur.x, n.y - cur.y);
+        if (d < bd) { bd = d; best = n; }
+      });
+      cur = best;
+      path.push(cur);
+      // greedy hops toward target within the layer
+      for (let hop = 0; hop < 8; hop++) {
+        let next = null, nd = Math.hypot(cur.x - target.x, cur.y - target.y);
+        edges.forEach(e => {
+          if (e.layer !== layer) return;
+          let nb = null;
+          if (nodes[e.a] === cur) nb = nodes[e.b];
+          else if (nodes[e.b] === cur) nb = nodes[e.a];
+          if (!nb) return;
+          const d = Math.hypot(nb.x - target.x, nb.y - target.y);
+          if (d < nd) { nd = d; next = nb; }
+        });
+        if (!next) break;
+        cur = next;
+        path.push(cur);
+      }
+    }
+    path.push(target);
+    search = { path, t: 0, speed: 0.012 + Math.random() * 0.008 };
+  }
+  newSearch();
+
+  const LAYER_ALPHA = [0.5, 0.7, 0.95];
+
+  function frame() {
+    ctx.clearRect(0, 0, W, H);
+
+    // drift
+    if (!reduced) {
+      nodes.forEach(n => {
+        n.x += n.dx; n.y += n.dy;
+        if (n.x < -20) n.x = W + 20; if (n.x > W + 20) n.x = -20;
+        if (n.y < -20) n.y = H + 20; if (n.y > H + 20) n.y = -20;
+      });
+    }
+
+    // edges
+    edges.forEach(e => {
+      const a = nodes[e.a], b = nodes[e.b];
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (d > 340) return;
+      ctx.strokeStyle = `rgba(200, 184, 255, ${0.05 * LAYER_ALPHA[e.layer] * (1 - d / 340)})`;
+      ctx.lineWidth = e.layer === 0 ? 0.6 : 1;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    });
+
+    // nodes
+    nodes.forEach(n => {
+      ctx.fillStyle = n.layer === 2
+        ? "rgba(126, 240, 212, 0.8)"
+        : `rgba(236, 233, 226, ${0.25 + n.layer * 0.2})`;
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    // active search traversal
+    if (search && !reduced) {
+      const { path } = search;
+      search.t += search.speed;
+      const prog = search.t * (path.length - 1);
+      const seg = Math.min(Math.floor(prog), path.length - 2);
+      const frac = prog - seg;
+
+      // traversed trail
+      ctx.lineWidth = 1.4;
+      for (let i = 0; i < seg; i++) {
+        const fade = Math.max(0, 1 - (seg - i) * 0.12);
+        ctx.strokeStyle = `rgba(126, 240, 212, ${0.35 * fade})`;
+        ctx.beginPath();
+        ctx.moveTo(path[i].x, path[i].y);
+        ctx.lineTo(path[i + 1].x, path[i + 1].y);
+        ctx.stroke();
+      }
+      // current pulse
+      const px = path[seg].x + (path[seg + 1].x - path[seg].x) * frac;
+      const py = path[seg].y + (path[seg + 1].y - path[seg].y) * frac;
+      const grad = ctx.createRadialGradient(px, py, 0, px, py, 14);
+      grad.addColorStop(0, "rgba(126, 240, 212, 0.9)");
+      grad.addColorStop(1, "rgba(126, 240, 212, 0)");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(px, py, 14, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#bffff0";
+      ctx.beginPath();
+      ctx.arc(px, py, 2.4, 0, Math.PI * 2);
+      ctx.fill();
+
+      if (search.t >= 1) {
+        // flash the found target, then start a new search
+        const tg = path[path.length - 1];
+        ctx.strokeStyle = "rgba(200, 184, 255, 0.8)";
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(tg.x, tg.y, 9, 0, Math.PI * 2);
+        ctx.stroke();
+        setTimeout(newSearch, 600);
+        search = null;
+      }
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+
+/* ---- scroll reveal ---- */
+(() => {
+  const io = new IntersectionObserver(entries => {
+    entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); } });
+  }, { threshold: 0.12 });
+  document.querySelectorAll(".reveal").forEach(el => io.observe(el));
+})();
+</script>
+</body>
+</html>
