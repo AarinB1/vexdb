@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>vexdb — a vector database from first principles</title>
-<meta name="description" content="A vector database written in Rust, from scratch. Hand-rolled HNSW, property-tested recall, benchmarked against brute force — built in public, phase by phase.">
+<meta name="description" content="A vector database written in Rust, from scratch. Hand-rolled HNSW, property-tested recall, benchmarked honestly against faiss — with a live in-browser demo that X-rays the real graph traversal, search by search.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&family=JetBrains+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
@@ -609,9 +609,152 @@
   .hit .more:hover { text-decoration: underline; }
   .demo-err { color: #ff8a8a; font-family: var(--mono); font-size: 12.5px; margin-top: 12px; white-space: pre-wrap; }
 
+  /* ---- the search X-ray ---- */
+  .xray { margin-top: 34px; border-top: 1px solid var(--line); padding-top: 28px; }
+  .xray-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 18px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+  .xray-title {
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: 24px;
+    line-height: 1.2;
+  }
+  .xray-sub { color: var(--ink-dim); font-size: 13.5px; max-width: 64ch; margin-top: 6px; }
+  .xray-sub .mono { font-family: var(--mono); font-size: 0.92em; color: var(--ink); }
+  .xray-ctl { display: flex; gap: 10px; align-items: center; }
+  .xray-ctl select {
+    background: var(--bg);
+    color: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    padding: 8px 10px;
+    outline: none;
+  }
+  .xray-stage {
+    position: relative;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    overflow: hidden;
+    height: clamp(340px, 46vw, 520px);
+  }
+  .xray-stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; }
+  .xr-hud {
+    position: absolute;
+    top: 12px; left: 14px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--ink-dim);
+    background: rgba(8, 7, 11, 0.55);
+    backdrop-filter: blur(4px);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 7px 11px;
+    pointer-events: none;
+    white-space: pre;
+    display: none;
+  }
+  .xr-hud b { color: var(--accent-2); font-weight: 400; }
+  .xr-tip {
+    position: absolute;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--ink);
+    background: rgba(14, 13, 19, 0.92);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 6px 10px;
+    pointer-events: none;
+    transform: translate(-50%, calc(-100% - 12px));
+    white-space: nowrap;
+    display: none;
+    z-index: 3;
+  }
+  .xr-tip .yr2 { color: var(--ink-faint); }
+  .xr-idle {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--ink-faint);
+    pointer-events: none;
+    text-align: center;
+    padding: 0 24px;
+  }
+  .xr-scrub {
+    width: 100%;
+    margin-top: 14px;
+    accent-color: var(--accent);
+  }
+  .xr-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 20px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-faint);
+    margin-top: 10px;
+  }
+  .xr-legend i.sw {
+    display: inline-block;
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    margin-right: 6px;
+    vertical-align: -1px;
+  }
+  .sw-result { background: var(--accent-2); box-shadow: 0 0 6px var(--accent-2); }
+  .sw-admitted { background: var(--accent); }
+  .sw-routed { background: #f0a868; }
+  .sw-rejected { background: rgba(155, 151, 168, 0.55); }
+  .sw-descent { background: #fff; box-shadow: 0 0 6px rgba(255,255,255,0.7); }
+  .sw-query { background: transparent; border: 1.5px solid #fff; border-radius: 2px !important; transform: rotate(45deg); }
+  .explain {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink-dim);
+    margin-top: 16px;
+    line-height: 1.9;
+    min-height: 20px;
+  }
+  .explain b { color: var(--accent-2); font-weight: 400; }
+
+  /* ---- the recall lab ---- */
+  .lab { margin-top: 34px; border-top: 1px solid var(--line); padding-top: 28px; }
+  .lab-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 18px;
+    flex-wrap: wrap;
+    margin-bottom: 6px;
+  }
+  .lab-chart-wrap { margin-top: 16px; display: none; }
+  .lab-chart-wrap.on { display: block; }
+  #lab-chart { width: 100%; height: 250px; display: block; }
+  .lab-note {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink-dim);
+    margin-top: 12px;
+    line-height: 1.9;
+  }
+  .lab-note b { color: var(--accent-2); font-weight: 400; }
+
   @media (max-width: 760px) {
     .demo-controls { grid-template-columns: 1fr; }
     .demo-btn { padding: 12px 24px; }
+    .xray-stage { height: 300px; }
   }
 
   @media (max-width: 760px) {
@@ -656,7 +799,7 @@
       curves at parity</em>, and the remaining QPS gap measured and explained.
     </p>
     <div class="cta-row">
-      <a class="btn btn-solid" href="#demo">Try it in your browser ↓</a>
+      <a class="btn btn-solid" href="#demo">Watch it think — live demo ↓</a>
       <a class="btn btn-ghost" href="https://github.com/aarinb1/vexdb">Read the source</a>
     </div>
     <div class="hero-stats">
@@ -672,9 +815,12 @@
     <div class="sec-kicker reveal">00 · Live demo</div>
     <h2 class="reveal">This database is running <em style="font-style:italic">in your tab.</em></h2>
     <p class="sec-sub reveal">
-      No server, no video — vex-core compiled to WebAssembly (275&nbsp;KB), searching
+      No server, no video — vex-core compiled to WebAssembly (289&nbsp;KB), searching
       5,000 movie-plot embeddings with the same HNSW graph, filters, and snapshot
-      format as the native build. Boot it and describe a movie.
+      format as the native build. Boot it, describe a movie — then
+      <em style="color:var(--ink)">watch the X-ray</em>: every search animates the
+      engine's own traversal trace, and a live benchmark measures recall against
+      brute-force ground truth on your hardware.
     </p>
 
     <div class="demo-shell reveal">
@@ -713,6 +859,64 @@
         <div class="lat-strip" id="lat"></div>
         <div class="hits" id="hits"></div>
         <div class="demo-err" id="demo-err"></div>
+
+        <div class="xray" id="xray" style="display:none">
+          <div class="xray-head">
+            <div>
+              <h3 class="xray-title">The search, X-rayed</h3>
+              <p class="xray-sub">
+                Every search above replays here — not a mock-up, the actual trace the engine
+                recorded: the greedy descent through the sparse upper layers, then the
+                <span class="mono">ef</span>-wide beam over layer&nbsp;0. The point cloud is all
+                5,000 plot embeddings, PCA-projected from 384 dimensions in your tab.
+                Hover any point for its movie.
+              </p>
+            </div>
+            <div class="xray-ctl">
+              <select id="xr-speed" title="playback speed">
+                <option value="0.5">0.5×</option>
+                <option value="1" selected>1×</option>
+                <option value="2">2×</option>
+                <option value="4">4×</option>
+              </select>
+              <button class="demo-btn ghost" id="xr-replay" disabled>replay</button>
+            </div>
+          </div>
+          <div class="xray-stage">
+            <canvas id="xr-canvas"></canvas>
+            <div class="xr-hud" id="xr-hud"></div>
+            <div class="xr-tip" id="xr-tip"></div>
+            <div class="xr-idle" id="xr-idle">run a search above to watch the traversal</div>
+          </div>
+          <input type="range" class="xr-scrub" id="xr-scrub" min="0" max="1000" value="0" disabled>
+          <div class="xr-legend">
+            <span><i class="sw sw-query"></i>query</span>
+            <span><i class="sw sw-descent"></i>descent path</span>
+            <span><i class="sw sw-result"></i>result</span>
+            <span><i class="sw sw-admitted"></i>beam candidate</span>
+            <span><i class="sw sw-routed"></i>filtered out — routes the beam, can't be a result</span>
+            <span><i class="sw sw-rejected"></i>evaluated, too far</span>
+          </div>
+          <div class="explain" id="explain"></div>
+
+          <div class="lab">
+            <div class="lab-head">
+              <div>
+                <h3 class="xray-title">Recall, measured — not claimed</h3>
+                <p class="xray-sub">
+                  Brute-force the exact top-10 for the current query, then sweep
+                  <span class="mono">ef</span> over the same index and measure recall@10 and
+                  latency. Benchmarked live, in this tab, on your hardware.
+                </p>
+              </div>
+              <button class="demo-btn" id="lab-run" disabled>run the sweep</button>
+            </div>
+            <div class="lab-chart-wrap" id="lab-chart-wrap">
+              <canvas id="lab-chart"></canvas>
+              <div class="lab-note" id="lab-note"></div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -913,9 +1117,20 @@ build:   flat   23.0ms   hnsw(M=16, efc=200)   48.4s
         <div class="no">/10</div>
         <div class="what">
           <h3>The browser build</h3>
-          <p>vex-wasm: the engine compiled to 275 KB of WebAssembly. The live demo at the
+          <p>vex-wasm: the engine compiled to 289 KB of WebAssembly. The live demo at the
           top of this page — 5,000 movie embeddings, filters, snapshot parsing — is the
           same Rust running in your tab.</p>
+        </div>
+        <div class="st done">● shipped</div>
+      </div>
+      <div class="phase">
+        <div class="no">/11</div>
+        <div class="what">
+          <h3>The X-ray</h3>
+          <p>Zero-cost trace instrumentation in the engine (<code>search_traced</code>) and
+          an exact-scan oracle (<code>search_exact</code>): the demo animates the real
+          traversal — descent, beam, filter rejections — over a PCA projection computed
+          in-tab, and measures live recall curves against ground truth.</p>
         </div>
         <div class="st done">● shipped</div>
       </div>
@@ -1120,13 +1335,23 @@ build:   flat   23.0ms   hnsw(M=16, efc=200)   48.4s
   requestAnimationFrame(frame);
 })();
 
-/* ---- live demo: vex-core in WebAssembly ---- */
+/* ---- live demo: vex-core in WebAssembly + the search X-ray ---- */
 (() => {
   const $ = id => document.getElementById(id);
-  const state = { index: null, meta: null, embedder: null, modelLoading: null };
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const state = {
+    index: null, meta: null, embedder: null, modelLoading: null,
+    viz: null,                  // docs/demo/viz.js — pure math, also tested in Node
+    xy: null, basis: null, bounds: null,  // PCA projection of every stored vector
+    rowOf: null, idAt: null,    // vector id <-> projection row
+    payloads: new Map(),        // id -> payload, cached for hover tips
+    last: null,                 // {vec, label} of the last search — ef re-runs + the lab
+  };
 
   const setErr = msg => { $("demo-err").textContent = msg || ""; };
   const fmtMs = ms => ms < 10 ? ms.toFixed(2) + " ms" : ms.toFixed(0) + " ms";
+  const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const nextPaint = () => new Promise(r => setTimeout(r, 30));
 
   async function fetchWithProgress(url, onPct) {
     const res = await fetch(url);
@@ -1174,15 +1399,48 @@ build:   flat   23.0ms   hnsw(M=16, efc=200)   48.4s
         o.textContent = g;
         $("genre").appendChild(o);
       }
+
+      // Project every stored embedding to 2-D for the X-ray. PCA by power
+      // iteration, fitted and applied right here — no precomputed layout.
+      let pcaNote = "";
+      let xrayReady = false;
+      try {
+        status.textContent = `projecting ${index.len().toLocaleString()} embeddings to 2-D (PCA, in this tab)…`;
+        await nextPaint();
+        const viz = await import("./demo/viz.js");
+        const tp = performance.now();
+        const ids = index.exportIds();          // BigUint64Array, storage order
+        const vectors = index.exportVectors();  // Float32Array, same order
+        const basis = viz.fitPca2(vectors, ids.length, index.dim());
+        const { xy, bounds } = viz.projectAll(vectors, ids.length, index.dim(), basis);
+        const pcaMs = performance.now() - tp;
+        state.viz = viz;
+        state.xy = xy;
+        state.basis = basis;
+        state.bounds = bounds;
+        state.idAt = Array.from(ids, v => Number(v)); // row -> id
+        state.rowOf = new Map(state.idAt.map((id, i) => [id, i]));
+        pcaNote = `<span>2-D map: PCA in <b>${fmtMs(pcaMs)}</b></span>`;
+        xrayReady = true;
+      } catch (e) {
+        console.error("x-ray disabled:", e); // search still works without it
+      }
+
       $("stats-strip").innerHTML =
         `<span><b>${index.len().toLocaleString()}</b> movie plots</span>` +
         `<span>dim <b>${index.dim()}</b> · cosine</span>` +
         `<span>HNSW · M=16</span>` +
         `<span>snapshot parsed in <b>${fmtMs(loadMs)}</b></span>` +
-        `<span>engine: <b>275 KB</b> wasm</span>` +
+        `<span>engine: <b>289 KB</b> wasm</span>` +
+        pcaNote +
         `<span>years ${meta.yearRange[0]}–${meta.yearRange[1]}</span>`;
       $("boot-zone").style.display = "none";
       $("demo-main").classList.add("on");
+      if (xrayReady) {
+        // The canvas can only measure itself once #demo-main is visible.
+        $("xray").style.display = "block";
+        xray.init();
+      }
     } catch (e) {
       btn.disabled = false;
       prog.classList.remove("on");
@@ -1194,6 +1452,15 @@ build:   flat   23.0ms   hnsw(M=16, efc=200)   48.4s
   function filterJson() {
     const g = $("genre").value;
     return g ? JSON.stringify({ contains: { key: "genres", value: g } }) : null;
+  }
+
+  function payloadOf(id) {
+    let p = state.payloads.get(id);
+    if (p === undefined) {
+      p = state.index.payloadOf(BigInt(id)) || null;
+      state.payloads.set(id, p);
+    }
+    return p;
   }
 
   function render(hits, latHtml) {
@@ -1219,16 +1486,19 @@ build:   flat   23.0ms   hnsw(M=16, efc=200)   48.4s
     wrap.querySelectorAll(".more").forEach(b =>
       b.addEventListener("click", () => searchById(+b.dataset.id)));
   }
-  const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
   function searchVector(vec, label) {
     setErr("");
     try {
       const ef = +$("ef").value;
+      const filter = filterJson();
       const t0 = performance.now();
-      const hits = state.index.search(vec, 9, ef, filterJson());
+      const hits = state.index.search(vec, 9, ef, filter);
       const ms = performance.now() - t0;
       render(hits, `${label}HNSW search (ef=${ef}): <b>${fmtMs(ms)}</b> over ${state.index.len().toLocaleString()} vectors — in WebAssembly`);
+      state.last = { vec, label };
+      $("lab-run").disabled = false;
+      xray.show(vec, ef, filter, ms);
     } catch (e) { setErr(e.message); }
   }
 
@@ -1290,9 +1560,466 @@ build:   flat   23.0ms   hnsw(M=16, efc=200)   48.4s
 
   $("go").addEventListener("click", typedSearch);
   $("q").addEventListener("keydown", e => { if (e.key === "Enter") typedSearch(); });
-  $("ef").addEventListener("input", () => { $("ef-val").textContent = $("ef").value; });
   document.querySelectorAll("#chips .chip").forEach(c =>
     c.addEventListener("click", () => { $("q").value = c.textContent; typedSearch(); }));
+
+  // The ef slider and genre filter re-run the last search (debounced), so
+  // dragging ef visibly widens the beam in the X-ray.
+  let rerunTimer = 0;
+  const rerunLast = () => {
+    if (!state.last) return;
+    clearTimeout(rerunTimer);
+    rerunTimer = setTimeout(() => searchVector(state.last.vec, state.last.label), 260);
+  };
+  $("ef").addEventListener("input", () => { $("ef-val").textContent = $("ef").value; rerunLast(); });
+  $("genre").addEventListener("change", rerunLast);
+
+  /* ---------- the X-ray: animate the engine's own search trace ---------- */
+  const xray = (() => {
+    const RECENT = 150;   // events drawn in the bright "live" window
+    const COL = {
+      base: "rgba(236,233,226,0.16)",
+      dot: { admitted: "#c8b8ff", routed: "#f0a868", rejected: "rgba(155,151,168,0.5)" },
+      edge: { admitted: "200,184,255", routed: "240,168,104", rejected: "155,151,168" },
+      descent: "255,255,255",
+      result: "#7ef0d4",
+    };
+    let cv, ctx, W, H, dpr;
+    let baseCv = null, accumCv = null, accumCtx = null, accumUpTo = 0;
+    let tl = null, trace = null, hits = [], q2d = null, efNow = 0;
+    let prog = 0, total = 0, playing = false, rafId = 0, lastTs = 0;
+    let grid = null;
+    const CELL = 36;
+    let inited = false;
+
+    const px = row => [
+      (0.04 + state.xy[row * 2] * 0.92) * W,
+      (0.06 + state.xy[row * 2 + 1] * 0.88) * H,
+    ];
+    const pxOfId = id => {
+      const row = state.rowOf.get(id);
+      return row === undefined ? null : px(row);
+    };
+
+    function layer(w, h) {
+      const c = document.createElement("canvas");
+      c.width = w * dpr;
+      c.height = h * dpr;
+      const g = c.getContext("2d");
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      return [c, g];
+    }
+
+    function resize() {
+      dpr = Math.min(devicePixelRatio || 1, 2);
+      W = cv.clientWidth;
+      H = cv.clientHeight;
+      if (!W || !H) return; // hidden or zero-sized: keep the previous layers
+      cv.width = W * dpr;
+      cv.height = H * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      let g;
+      [baseCv, g] = layer(W, H);
+      g.fillStyle = COL.base;
+      const n = state.xy.length / 2;
+      for (let i = 0; i < n; i++) {
+        const [x, y] = px(i);
+        g.beginPath();
+        g.arc(x, y, 1.5, 0, 7);
+        g.fill();
+      }
+      grid = new Map();
+      for (let i = 0; i < n; i++) {
+        const [x, y] = px(i);
+        const key = ((x / CELL) | 0) * 4096 + ((y / CELL) | 0);
+        let cell = grid.get(key);
+        if (!cell) grid.set(key, cell = []);
+        cell.push(i);
+      }
+      resetAccum();
+      renderFrame();
+    }
+
+    function resetAccum() {
+      [accumCv, accumCtx] = layer(W, H);
+      accumUpTo = 0;
+    }
+
+    function edgeLine(g, e, alpha, width) {
+      const a = pxOfId(e.from), b = pxOfId(e.to);
+      if (!a || !b) return;
+      const rgb = e.t === "descent" ? COL.descent : COL.edge[e.status];
+      g.strokeStyle = `rgba(${rgb},${alpha})`;
+      g.lineWidth = width;
+      g.beginPath();
+      g.moveTo(a[0], a[1]);
+      g.lineTo(b[0], b[1]);
+      g.stroke();
+    }
+
+    function bake(e) {
+      if (e.t === "descent") {
+        edgeLine(accumCtx, e, 0.55, 1.6);
+        const p = pxOfId(e.to);
+        if (p) {
+          accumCtx.fillStyle = `rgba(${COL.descent},0.9)`;
+          accumCtx.beginPath();
+          accumCtx.arc(p[0], p[1], 2.6, 0, 7);
+          accumCtx.fill();
+        }
+        return;
+      }
+      edgeLine(accumCtx, e, e.status === "rejected" ? 0.035 : 0.10, 0.7);
+      const p = pxOfId(e.to);
+      if (!p) return;
+      accumCtx.fillStyle = COL.dot[e.status];
+      accumCtx.beginPath();
+      accumCtx.arc(p[0], p[1], e.status === "rejected" ? 1.6 : 2.2, 0, 7);
+      accumCtx.fill();
+    }
+
+    function drawLive(e, frac, isHead) {
+      edgeLine(ctx, e, e.t === "descent" ? 0.9 : 0.07 + 0.45 * frac, e.t === "descent" ? 1.8 : 0.8);
+      const p = pxOfId(e.to);
+      if (!p) return;
+      ctx.fillStyle = e.t === "descent" ? `rgba(${COL.descent},0.95)` : COL.dot[e.status];
+      ctx.beginPath();
+      ctx.arc(p[0], p[1], e.t === "descent" ? 3 : (e.status === "rejected" ? 1.6 : 2.4), 0, 7);
+      ctx.fill();
+      if (isHead) {
+        const grad = ctx.createRadialGradient(p[0], p[1], 0, p[0], p[1], 16);
+        grad.addColorStop(0, "rgba(126,240,212,0.75)");
+        grad.addColorStop(1, "rgba(126,240,212,0)");
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(p[0], p[1], 16, 0, 7);
+        ctx.fill();
+      }
+    }
+
+    function drawQuery() {
+      if (!q2d) return;
+      const x = (0.04 + q2d[0] * 0.92) * W;
+      const y = (0.06 + q2d[1] * 0.88) * H;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(Math.PI / 4);
+      ctx.strokeStyle = "rgba(255,255,255,0.95)";
+      ctx.lineWidth = 1.6;
+      ctx.strokeRect(-4.5, -4.5, 9, 9);
+      ctx.restore();
+      ctx.strokeStyle = "rgba(255,255,255,0.25)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(x, y, 11, 0, 7);
+      ctx.stroke();
+    }
+
+    function drawFinal() {
+      ctx.font = "10px JetBrains Mono, monospace";
+      hits.forEach((h, i) => {
+        const p = pxOfId(h.id);
+        if (!p) return;
+        ctx.fillStyle = COL.result;
+        ctx.beginPath();
+        ctx.arc(p[0], p[1], 3, 0, 7);
+        ctx.fill();
+        ctx.strokeStyle = COL.result;
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.arc(p[0], p[1], 7, 0, 7);
+        ctx.stroke();
+        ctx.fillStyle = "rgba(126,240,212,0.95)";
+        ctx.fillText(String(i + 1), p[0] + 9, p[1] - 7);
+      });
+    }
+
+    function hud(p) {
+      const el = $("xr-hud");
+      if (!trace || !total) { el.style.display = "none"; return; }
+      const dCount = trace.descent.length;
+      const phase = p < dCount
+        ? `greedy descent · layer ${tl.events[Math.min(p, total - 1)].layer}`
+        : `beam search · layer 0 · ef=${efNow}`;
+      const seen = Math.max(0, Math.min(p, total) - dCount);
+      el.innerHTML = `${phase}\n<b>${seen.toLocaleString()}</b> / ${trace.beam.length.toLocaleString()} beam evaluations`;
+      el.style.display = "block";
+    }
+
+    function renderFrame() {
+      ctx.clearRect(0, 0, W, H);
+      if (baseCv) ctx.drawImage(baseCv, 0, 0, W, H);
+      if (!tl) return;
+      const p = Math.min(total, Math.floor(prog));
+      const settleTo = Math.max(0, p - RECENT);
+      if (settleTo < accumUpTo) resetAccum();
+      while (accumUpTo < settleTo) bake(tl.events[accumUpTo++]);
+      ctx.drawImage(accumCv, 0, 0, W, H);
+      const span = Math.max(1, p - settleTo);
+      for (let i = settleTo; i < p; i++) {
+        drawLive(tl.events[i], (i - settleTo) / span, i === p - 1 && playing);
+      }
+      drawQuery();
+      if (p >= total && total > 0) drawFinal();
+      hud(p);
+    }
+
+    function tick(ts) {
+      if (!lastTs) lastTs = ts;
+      const dt = ts - lastTs;
+      lastTs = ts;
+      const speed = +$("xr-speed").value || 1;
+      const duration = Math.min(5200, Math.max(2400, 900 + total * 1.4));
+      prog = Math.min(total, prog + dt * (total / duration) * speed);
+      $("xr-scrub").value = String(Math.floor(prog));
+      renderFrame();
+      if (prog < total && playing) {
+        rafId = requestAnimationFrame(tick);
+      } else {
+        playing = false;
+        renderFrame(); // settle the final frame without the live pulse
+      }
+    }
+
+    function play() {
+      cancelAnimationFrame(rafId);
+      playing = true;
+      lastTs = 0;
+      rafId = requestAnimationFrame(tick);
+    }
+
+    function show(vec, ef, filter, engineMs) {
+      if (!inited || !state.viz) return;
+      let traced;
+      try {
+        traced = state.index.searchTrace(vec, 9, ef, filter);
+      } catch (e) {
+        console.error("trace failed:", e);
+        return; // the X-ray is best-effort; the demo proper already rendered
+      }
+      trace = traced.trace;
+      hits = traced.hits;
+      efNow = ef;
+      tl = state.viz.buildTimeline(trace, hits);
+      total = tl.events.length;
+      q2d = state.viz.projectPoint(vec, state.basis, state.bounds);
+      $("xr-idle").style.display = "none";
+      $("xr-replay").disabled = false;
+      const scrub = $("xr-scrub");
+      scrub.disabled = false;
+      scrub.max = String(total);
+      explain(engineMs);
+      resetAccum();
+      if (reduced || total === 0) {
+        playing = false;
+        prog = total;
+        scrub.value = String(total);
+        renderFrame();
+        return;
+      }
+      prog = 0;
+      play();
+    }
+
+    function explain(engineMs) {
+      const t = trace;
+      const n = state.index.len();
+      const pct = (100 * t.visited / n).toFixed(1);
+      const routed = tl.counts.routed
+        ? ` · <b>${tl.counts.routed.toLocaleString()}</b> filtered-out nodes routed the beam`
+        : "";
+      $("explain").innerHTML =
+        `entered at layer <b>${t.max_layer}</b> · <b>${t.descent.length}</b> greedy hops down · ` +
+        `visited <b>${t.visited.toLocaleString()}</b> of ${n.toLocaleString()} vectors (<b>${pct}%</b>) · ` +
+        `<b>${t.distance_evals.toLocaleString()}</b> distance evals${routed} · ` +
+        `engine time <b>${fmtMs(engineMs)}</b>`;
+    }
+
+    // Hover: nearest projected point within reach, resolved to its movie.
+    function hover(ev) {
+      const rect = cv.getBoundingClientRect();
+      const mx = ev.clientX - rect.left;
+      const my = ev.clientY - rect.top;
+      let bestRow = -1, bestD = 16 * 16;
+      const cx = (mx / CELL) | 0, cy = (my / CELL) | 0;
+      for (let gx = cx - 1; gx <= cx + 1; gx++) {
+        for (let gy = cy - 1; gy <= cy + 1; gy++) {
+          const cell = grid.get(gx * 4096 + gy);
+          if (!cell) continue;
+          for (const row of cell) {
+            const [x, y] = px(row);
+            const d = (x - mx) ** 2 + (y - my) ** 2;
+            if (d < bestD) { bestD = d; bestRow = row; }
+          }
+        }
+      }
+      const tip = $("xr-tip");
+      if (bestRow < 0) { tip.style.display = "none"; return; }
+      const p = payloadOf(state.idAt[bestRow]);
+      if (!p) { tip.style.display = "none"; return; }
+      const [x, y] = px(bestRow);
+      tip.innerHTML = `${esc(p.title)} <span class="yr2">(${p.year})</span>`;
+      tip.style.left = x + "px";
+      tip.style.top = y + "px";
+      tip.style.display = "block";
+    }
+
+    function init() {
+      if (inited) return;
+      cv = $("xr-canvas");
+      ctx = cv.getContext("2d");
+      resize();
+      let resizeTimer = 0;
+      addEventListener("resize", () => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(resize, 120);
+      });
+      $("xr-scrub").addEventListener("input", e => {
+        playing = false;
+        prog = +e.target.value;
+        renderFrame();
+      });
+      $("xr-replay").addEventListener("click", () => {
+        if (!tl) return;
+        resetAccum();
+        prog = 0;
+        play();
+      });
+      let hoverPending = false;
+      cv.addEventListener("mousemove", ev => {
+        if (hoverPending) return;
+        hoverPending = true;
+        requestAnimationFrame(() => { hoverPending = false; hover(ev); });
+      });
+      cv.addEventListener("mouseleave", () => { $("xr-tip").style.display = "none"; });
+      inited = true;
+    }
+
+    return { init, show };
+  })();
+
+  /* ---------- the recall lab: ground truth, measured in this tab ---------- */
+  const EFS = [10, 20, 40, 80, 160, 320];
+  const labPause = () => new Promise(r => setTimeout(r, 16));
+
+  $("lab-run").addEventListener("click", async () => {
+    if (!state.last || !state.index || !state.viz) return;
+    const btn = $("lab-run");
+    const note = $("lab-note");
+    btn.disabled = true;
+    $("lab-chart-wrap").classList.add("on");
+    const q = state.last.vec;
+    const filter = filterJson();
+    const viz = state.viz;
+    try {
+      note.textContent = "computing the exact top-10 by brute force…";
+      await labPause();
+      let exact;
+      const exactTimes = [];
+      for (let r = 0; r < 3; r++) {
+        const t0 = performance.now();
+        exact = state.index.searchExact(q, 10, filter);
+        exactTimes.push(performance.now() - t0);
+      }
+      const exactMs = viz.median(exactTimes);
+
+      const rows = [];
+      for (const ef of EFS) {
+        note.textContent = `sweeping ef=${ef}…`;
+        await labPause();
+        state.index.search(q, 10, ef, filter); // warm
+        const times = [];
+        const B = 8;
+        for (let r = 0; r < 3; r++) {
+          const t0 = performance.now();
+          for (let b = 0; b < B; b++) state.index.search(q, 10, ef, filter);
+          times.push((performance.now() - t0) / B);
+        }
+        const hits = state.index.search(q, 10, ef, filter);
+        rows.push({ ef, ms: viz.median(times), recall: viz.recallOf(exact, hits) });
+      }
+
+      drawChart($("lab-chart"), rows, exactMs);
+      const good = rows.find(r => r.recall >= 0.95) || rows[rows.length - 1];
+      const genre = $("genre").value;
+      note.innerHTML =
+        `exact top-10${genre ? ` (genre: ${esc(genre)})` : ""}: <b>${fmtMs(exactMs)}</b>/query · ` +
+        `ef=${good.ef} reaches recall <b>${good.recall.toFixed(2)}</b> in <b>${fmtMs(good.ms)}</b> — ` +
+        `<b>${(exactMs / good.ms).toFixed(1)}×</b> faster than the exact scan. ` +
+        `Every number above was measured seconds ago, on your hardware.`;
+    } catch (e) {
+      note.textContent = "sweep failed: " + e.message;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  function drawChart(canvas, rows, exactMs) {
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    const W = canvas.clientWidth, H = canvas.clientHeight || 250;
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    const g = canvas.getContext("2d");
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, W, H);
+    const L = 46, R = 14, T = 22, B = 32;
+    const iw = W - L - R, ih = H - T - B;
+    const x = i => L + (rows.length === 1 ? 0.5 : i / (rows.length - 1)) * iw;
+    const yRecall = v => T + (1 - v) * ih;
+    const allMs = rows.map(r => r.ms).concat([exactMs]);
+    const lo = Math.min(...allMs) * 0.6, hi = Math.max(...allMs) * 1.7;
+    const yLat = v => T + (1 - (Math.log(v) - Math.log(lo)) / (Math.log(hi) - Math.log(lo))) * ih;
+    g.font = "10.5px JetBrains Mono, monospace";
+
+    g.strokeStyle = "rgba(236,233,226,0.07)";
+    g.fillStyle = "rgba(155,151,168,0.9)";
+    for (const v of [0.25, 0.5, 0.75, 1.0]) {
+      g.beginPath(); g.moveTo(L, yRecall(v)); g.lineTo(L + iw, yRecall(v)); g.stroke();
+      g.textAlign = "right";
+      g.fillText(v.toFixed(2), L - 8, yRecall(v) + 3.5);
+    }
+    g.textAlign = "center";
+    rows.forEach((r, i) => g.fillText("ef=" + r.ef, x(i), H - 10));
+
+    g.setLineDash([4, 5]);
+    g.strokeStyle = "rgba(236,233,226,0.35)";
+    g.beginPath(); g.moveTo(L, yLat(exactMs)); g.lineTo(L + iw, yLat(exactMs)); g.stroke();
+    g.setLineDash([]);
+    g.textAlign = "left";
+    g.fillStyle = "rgba(236,233,226,0.6)";
+    g.fillText("exact scan · " + fmtMs(exactMs), L + 6, yLat(exactMs) - 6);
+
+    g.strokeStyle = "#c8b8ff";
+    g.setLineDash([5, 4]);
+    g.lineWidth = 1.4;
+    g.beginPath();
+    rows.forEach((r, i) => i ? g.lineTo(x(i), yLat(r.ms)) : g.moveTo(x(i), yLat(r.ms)));
+    g.stroke();
+    g.setLineDash([]);
+    g.fillStyle = "#c8b8ff";
+    rows.forEach((r, i) => { g.beginPath(); g.arc(x(i), yLat(r.ms), 3, 0, 7); g.fill(); });
+    g.fillStyle = "rgba(200,184,255,0.85)";
+    g.textAlign = "center";
+    rows.forEach((r, i) => g.fillText(fmtMs(r.ms), x(i), yLat(r.ms) + 17));
+
+    g.strokeStyle = "#7ef0d4";
+    g.lineWidth = 1.8;
+    g.beginPath();
+    rows.forEach((r, i) => i ? g.lineTo(x(i), yRecall(r.recall)) : g.moveTo(x(i), yRecall(r.recall)));
+    g.stroke();
+    g.fillStyle = "#7ef0d4";
+    rows.forEach((r, i) => {
+      g.beginPath(); g.arc(x(i), yRecall(r.recall), 3.2, 0, 7); g.fill();
+      g.textAlign = "center";
+      g.fillText(r.recall.toFixed(2), x(i), yRecall(r.recall) - 9);
+    });
+
+    g.textAlign = "right";
+    g.fillStyle = "#7ef0d4";
+    g.fillText("● recall@10", L + iw, T - 8);
+    g.fillStyle = "#c8b8ff";
+    g.fillText("● latency (log)", L + iw - 92, T - 8);
+  }
 })();
 
 /* ---- scroll reveal ---- */

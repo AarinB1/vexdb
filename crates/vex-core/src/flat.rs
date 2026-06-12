@@ -42,6 +42,14 @@ impl FlatIndex {
     pub fn contains(&self, id: VectorId) -> bool {
         self.id_to_pos.contains_key(&id)
     }
+
+    /// Iterate `(id, vector, payload)` over stored vectors in storage order.
+    /// The order is deterministic for an unmodified index.
+    pub fn iter_live(&self) -> impl Iterator<Item = (VectorId, &Vector, Option<&Payload>)> + '_ {
+        self.entries
+            .iter()
+            .map(|e| (e.id, &e.vector, e.payload.as_ref()))
+    }
 }
 
 impl Index for FlatIndex {

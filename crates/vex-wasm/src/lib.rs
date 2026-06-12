@@ -25,8 +25,8 @@ fn to_js<T: Serialize>(value: &T) -> Result<JsValue, JsError> {
 pub mod imp {
     use serde::Serialize;
     use vex_core::{
-        AnyIndex, DistanceMetric, Filter, HnswConfig, HnswIndex, Index, SnapshotError, Vector,
-        VectorId,
+        AnyIndex, DistanceMetric, Filter, HnswConfig, HnswIndex, Index, SearchResult, SearchTrace,
+        SnapshotError, Vector, VectorId,
     };
 
     #[derive(Debug, Serialize)]
@@ -35,6 +35,13 @@ pub mod imp {
         pub distance: f32,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub payload: Option<serde_json::Value>,
+    }
+
+    /// `search_trace` output: the hits plus the full traversal record.
+    #[derive(Debug, Serialize)]
+    pub struct TracedHits {
+        pub hits: Vec<Hit>,
+        pub trace: SearchTrace,
     }
 
     #[derive(Debug, Serialize)]
@@ -93,6 +100,24 @@ pub mod imp {
                 .map_err(|e| e.to_string())
         }
 
+        fn parse_filter(filter_json: Option<&str>) -> Result<Option<Filter>, String> {
+            filter_json
+                .map(serde_json::from_str)
+                .transpose()
+                .map_err(|e| format!("filter is not valid JSON: {e}"))
+        }
+
+        fn to_hits(&self, results: Vec<SearchResult>) -> Vec<Hit> {
+            results
+                .into_iter()
+                .map(|r| Hit {
+                    id: r.id.0,
+                    distance: r.distance,
+                    payload: self.index.payload(r.id).cloned(),
+                })
+                .collect()
+        }
+
         pub fn search(
             &self,
             query: &[f32],
@@ -100,22 +125,74 @@ pub mod imp {
             ef: Option<usize>,
             filter_json: Option<&str>,
         ) -> Result<Vec<Hit>, String> {
-            let filter: Option<Filter> = filter_json
-                .map(serde_json::from_str)
-                .transpose()
-                .map_err(|e| format!("filter is not valid JSON: {e}"))?;
+            let filter = Self::parse_filter(filter_json)?;
             let results = self
                 .index
                 .search_opts(query, k, ef, filter.as_ref())
                 .map_err(|e| e.to_string())?;
-            Ok(results
-                .into_iter()
-                .map(|r| Hit {
-                    id: r.id.0,
-                    distance: r.distance,
-                    payload: self.index.payload(r.id).cloned(),
-                })
-                .collect())
+            Ok(self.to_hits(results))
+        }
+
+        /// Search and return the full traversal trace alongside the hits.
+        /// Results are identical to [`Inner::search`] with the same
+        /// arguments. Only meaningful for HNSW indexes.
+        pub fn search_trace(
+            &self,
+            query: &[f32],
+            k: usize,
+            ef: Option<usize>,
+            filter_json: Option<&str>,
+        ) -> Result<TracedHits, String> {
+            let filter = Self::parse_filter(filter_json)?;
+            match &self.index {
+                AnyIndex::Hnsw(h) => {
+                    let ef = ef.unwrap_or(h.config().ef_search);
+                    let (results, trace) = h
+                        .search_traced(query, k, ef, filter.as_ref())
+                        .map_err(|e| e.to_string())?;
+                    Ok(TracedHits {
+                        hits: self.to_hits(results),
+                        trace,
+                    })
+                }
+                AnyIndex::Flat(_) => {
+                    Err("search_trace requires an hnsw index (flat has no traversal)".into())
+                }
+            }
+        }
+
+        /// Exact top-k by brute-force scan — the ground truth for measuring
+        /// HNSW recall live. For flat indexes plain search is already exact.
+        pub fn search_exact(
+            &self,
+            query: &[f32],
+            k: usize,
+            filter_json: Option<&str>,
+        ) -> Result<Vec<Hit>, String> {
+            let filter = Self::parse_filter(filter_json)?;
+            let results = match &self.index {
+                AnyIndex::Hnsw(h) => h.search_exact(query, k, filter.as_ref()),
+                AnyIndex::Flat(i) => i.search_filtered(query, k, filter.as_ref()),
+            }
+            .map_err(|e| e.to_string())?;
+            Ok(self.to_hits(results))
+        }
+
+        /// Ids of every live vector, in storage order — parallel to
+        /// [`Inner::export_vectors`] for an unmodified index.
+        pub fn export_ids(&self) -> Vec<u64> {
+            self.index.iter_live().map(|(id, _, _)| id.0).collect()
+        }
+
+        /// Every live vector concatenated into one flat `dim`-strided array,
+        /// in the same order as [`Inner::export_ids`]. One boundary crossing
+        /// instead of n — this is what feeds the in-browser projection.
+        pub fn export_vectors(&self) -> Vec<f32> {
+            let mut out = Vec::with_capacity(self.index.len() * self.index.dim());
+            for (_, vector, _) in self.index.iter_live() {
+                out.extend_from_slice(vector.as_slice());
+            }
+            out
         }
 
         pub fn vector_of(&self, id: u64) -> Option<Vec<f32>> {
@@ -203,6 +280,56 @@ impl VexIndex {
             .search(query, k, ef, filter_json.as_deref())
             .map_err(|e| JsError::new(&e))?;
         to_js(&hits)
+    }
+
+    /// Like `search`, but also returns the full traversal record:
+    /// `{hits, trace: {entry_id, max_layer, descent, beam, visited,
+    /// distance_evals}}`. The hits are identical to `search` with the same
+    /// arguments — the trace observes the traversal, it never alters it.
+    #[wasm_bindgen(js_name = searchTrace)]
+    pub fn search_trace(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: usize,
+        filter_json: Option<String>,
+    ) -> Result<JsValue, JsError> {
+        let ef = (ef > 0).then_some(ef);
+        let traced = self
+            .inner
+            .search_trace(query, k, ef, filter_json.as_deref())
+            .map_err(|e| JsError::new(&e))?;
+        to_js(&traced)
+    }
+
+    /// Exact top-k by brute-force scan over every live vector — ground
+    /// truth for measuring HNSW recall in the page itself.
+    #[wasm_bindgen(js_name = searchExact)]
+    pub fn search_exact(
+        &self,
+        query: &[f32],
+        k: usize,
+        filter_json: Option<String>,
+    ) -> Result<JsValue, JsError> {
+        let hits = self
+            .inner
+            .search_exact(query, k, filter_json.as_deref())
+            .map_err(|e| JsError::new(&e))?;
+        to_js(&hits)
+    }
+
+    /// Ids of every live vector in storage order (a `BigUint64Array`),
+    /// parallel to `exportVectors`.
+    #[wasm_bindgen(js_name = exportIds)]
+    pub fn export_ids(&self) -> Vec<u64> {
+        self.inner.export_ids()
+    }
+
+    /// Every live vector as one flat dim-strided `Float32Array`, in
+    /// `exportIds` order — one copy across the wasm boundary instead of n.
+    #[wasm_bindgen(js_name = exportVectors)]
+    pub fn export_vectors(&self) -> Vec<f32> {
+        self.inner.export_vectors()
     }
 
     /// The stored vector for an id — search with it for "more like this".
@@ -297,6 +424,76 @@ mod tests {
         let ids_a: Vec<u64> = a.iter().map(|h| h.id).collect();
         let ids_b: Vec<u64> = b.iter().map(|h| h.id).collect();
         assert_eq!(ids_a, ids_b, "results must be identical after round-trip");
+    }
+
+    #[test]
+    fn trace_matches_search_and_serializes() {
+        let inner = build_demo();
+        let query = inner.vector_of(42).unwrap();
+
+        let plain = inner.search(&query, 8, Some(64), None).unwrap();
+        let traced = inner.search_trace(&query, 8, Some(64), None).unwrap();
+        let plain_ids: Vec<u64> = plain.iter().map(|h| h.id).collect();
+        let traced_ids: Vec<u64> = traced.hits.iter().map(|h| h.id).collect();
+        assert_eq!(plain_ids, traced_ids, "trace changed the results");
+
+        assert!(traced.trace.visited > 0);
+        assert!(traced.trace.distance_evals >= traced.trace.visited);
+        assert!(!traced.trace.beam.is_empty());
+
+        // The JS boundary serializer needs plain JSON-compatible output.
+        let json = serde_json::to_value(&traced).unwrap();
+        assert!(json["hits"].is_array());
+        assert!(json["trace"]["beam"][0]["status"].is_string());
+        assert!(json["trace"]["visited"].is_number());
+
+        // Filtered traces mark routed (filter-rejected) nodes.
+        let filtered = inner
+            .search_trace(
+                &query,
+                8,
+                Some(64),
+                Some(r#"{"eq":{"key":"bucket","value":1}}"#),
+            )
+            .unwrap();
+        for h in &filtered.hits {
+            assert_eq!(h.id % 4, 1);
+        }
+        assert!(filtered
+            .trace
+            .beam
+            .iter()
+            .any(|e| matches!(e.status, vex_core::BeamStatus::Routed)));
+    }
+
+    #[test]
+    fn exact_search_is_perfect_recall_oracle() {
+        let inner = build_demo();
+        let query = inner.vector_of(11).unwrap();
+        let exact = inner.search_exact(&query, 10, None).unwrap();
+        assert_eq!(exact.len(), 10);
+        assert_eq!(exact[0].id, 11, "self is its own exact nearest neighbor");
+        for w in exact.windows(2) {
+            assert!(w[0].distance <= w[1].distance);
+        }
+        // A wide-open beam must agree with the exact scan on this small set.
+        let hnsw = inner.search(&query, 10, Some(400), None).unwrap();
+        let exact_ids: Vec<u64> = exact.iter().map(|h| h.id).collect();
+        let hnsw_ids: Vec<u64> = hnsw.iter().map(|h| h.id).collect();
+        assert_eq!(exact_ids, hnsw_ids);
+    }
+
+    #[test]
+    fn export_is_flat_parallel_and_complete() {
+        let inner = build_demo();
+        let ids = inner.export_ids();
+        let vectors = inner.export_vectors();
+        assert_eq!(ids.len(), 200);
+        assert_eq!(vectors.len(), 200 * 4);
+        for (i, &id) in ids.iter().enumerate() {
+            let row = &vectors[i * 4..(i + 1) * 4];
+            assert_eq!(row, inner.vector_of(id).unwrap().as_slice());
+        }
     }
 
     #[test]

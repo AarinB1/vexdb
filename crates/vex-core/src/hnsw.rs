@@ -20,6 +20,8 @@
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashMap};
 
+use serde::Serialize;
+
 use crate::distance::DistanceMetric;
 use crate::error::{Result, VexError};
 use crate::index::{Index, SearchResult};
@@ -106,6 +108,111 @@ impl PartialOrd for Candidate {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Search tracing.
+//
+// `search_traced` returns the same results as `search_filtered_with_ef` plus
+// a step-by-step record of what the traversal did: the greedy descent through
+// the upper layers and every edge the layer-0 beam evaluated. The plain
+// search paths thread a `NoopSink` through the same code, so tracing costs
+// nothing unless requested (the no-op methods monomorphize away).
+// ---------------------------------------------------------------------------
+
+/// What happened to a node the moment the beam evaluated it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BeamStatus {
+    /// Live, filter-matching, and close enough: admitted as a result
+    /// candidate (it may still be evicted by closer nodes later).
+    Admitted,
+    /// Tombstoned or filtered out: explored for routing, never a result.
+    Routed,
+    /// Already worse than the beam's worst kept result: evaluated, dropped.
+    Rejected,
+}
+
+/// One improvement step of the greedy descent through an upper layer.
+#[derive(Debug, Clone, Serialize)]
+pub struct DescentHop {
+    pub layer: usize,
+    pub from: u64,
+    pub to: u64,
+    pub distance: f32,
+}
+
+/// One neighbor evaluation during the layer-0 beam search, in evaluation
+/// order. `from` is the node whose adjacency list surfaced `to`.
+#[derive(Debug, Clone, Serialize)]
+pub struct BeamEdge {
+    pub from: u64,
+    pub to: u64,
+    pub distance: f32,
+    pub status: BeamStatus,
+}
+
+/// A full record of one HNSW search. Node references are vector ids, not
+/// internal arena positions, so callers can resolve payloads and vectors.
+///
+/// The layer-0 beam starts where the descent ends: the last [`DescentHop`]'s
+/// `to`, or `entry_id` when the descent made no hops. That start node is
+/// admitted to the result beam directly (if live and filter-matching), so it
+/// can appear in results without an `Admitted` beam edge of its own.
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchTrace {
+    /// Entry point of the graph (`None` only for an empty index).
+    pub entry_id: Option<u64>,
+    /// Distance from the query to the entry point.
+    pub entry_distance: Option<f32>,
+    /// Top layer of the graph at search time.
+    pub max_layer: usize,
+    /// Greedy hops through layers `max_layer..=1`, in order.
+    pub descent: Vec<DescentHop>,
+    /// Every layer-0 neighbor evaluation, in order.
+    pub beam: Vec<BeamEdge>,
+    /// Unique nodes whose distance was evaluated on layer 0.
+    pub visited: usize,
+    /// Total distance computations across all layers.
+    pub distance_evals: usize,
+}
+
+/// Observer threaded through the search internals. Default methods are
+/// no-ops; `NoopSink` (the plain-search case) compiles to nothing.
+pub(crate) trait TraceSink {
+    fn entry(&mut self, _pos: u32, _distance: f32) {}
+    fn descent_hop(&mut self, _layer: usize, _from: u32, _to: u32, _distance: f32) {}
+    fn beam_edge(&mut self, _from: u32, _to: u32, _distance: f32, _status: BeamStatus) {}
+    fn distance_eval(&mut self) {}
+}
+
+pub(crate) struct NoopSink;
+impl TraceSink for NoopSink {}
+
+/// Records raw arena positions during a search; `search_traced` resolves
+/// them to vector ids afterwards (the sink can't borrow the index while the
+/// search holds `&self`).
+#[derive(Default)]
+struct RecordingSink {
+    entry: Option<(u32, f32)>,
+    descent: Vec<(usize, u32, u32, f32)>,
+    beam: Vec<(u32, u32, f32, BeamStatus)>,
+    distance_evals: usize,
+}
+
+impl TraceSink for RecordingSink {
+    fn entry(&mut self, pos: u32, distance: f32) {
+        self.entry = Some((pos, distance));
+    }
+    fn descent_hop(&mut self, layer: usize, from: u32, to: u32, distance: f32) {
+        self.descent.push((layer, from, to, distance));
+    }
+    fn beam_edge(&mut self, from: u32, to: u32, distance: f32, status: BeamStatus) {
+        self.beam.push((from, to, distance, status));
+    }
+    fn distance_eval(&mut self) {
+        self.distance_evals += 1;
+    }
+}
+
 impl HnswIndex {
     pub fn new(dim: usize, metric: DistanceMetric, config: HnswConfig) -> Self {
         Self {
@@ -160,6 +267,117 @@ impl HnswIndex {
         ef: usize,
         filter: Option<&Filter>,
     ) -> Result<Vec<SearchResult>> {
+        self.search_inner(query, k, ef, filter, &mut NoopSink)
+    }
+
+    /// Search and record what the traversal did: greedy descent hops, every
+    /// layer-0 beam evaluation with its outcome, and work counters. Results
+    /// are identical to [`HnswIndex::search_filtered_with_ef`] with the same
+    /// arguments — tracing observes the search, it never alters it.
+    pub fn search_traced(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: usize,
+        filter: Option<&Filter>,
+    ) -> Result<(Vec<SearchResult>, SearchTrace)> {
+        let mut sink = RecordingSink::default();
+        let results = self.search_inner(query, k, ef, filter, &mut sink)?;
+        let id_of = |pos: u32| self.nodes[pos as usize].id.0;
+        // Each beam edge targets a node at most once (the visited set dedups
+        // before evaluation), so visited = beam targets + the entry point.
+        let visited = sink.beam.len() + usize::from(sink.entry.is_some());
+        let trace = SearchTrace {
+            entry_id: sink.entry.map(|(pos, _)| id_of(pos)),
+            entry_distance: sink.entry.map(|(_, d)| d),
+            max_layer: self.max_layer,
+            descent: sink
+                .descent
+                .into_iter()
+                .map(|(layer, from, to, distance)| DescentHop {
+                    layer,
+                    from: id_of(from),
+                    to: id_of(to),
+                    distance,
+                })
+                .collect(),
+            beam: sink
+                .beam
+                .into_iter()
+                .map(|(from, to, distance, status)| BeamEdge {
+                    from: id_of(from),
+                    to: id_of(to),
+                    distance,
+                    status,
+                })
+                .collect(),
+            visited,
+            distance_evals: sink.distance_evals,
+        };
+        Ok((results, trace))
+    }
+
+    /// Exact top-k by brute force over every live vector — the ground-truth
+    /// oracle for measuring this same index's HNSW recall. O(n) distance
+    /// evaluations; same validation and result contract as `search`.
+    pub fn search_exact(
+        &self,
+        query: &[f32],
+        k: usize,
+        filter: Option<&Filter>,
+    ) -> Result<Vec<SearchResult>> {
+        if k == 0 {
+            return Err(VexError::InvalidK);
+        }
+        if query.len() != self.dim {
+            return Err(VexError::DimensionMismatch {
+                expected: self.dim,
+                actual: query.len(),
+            });
+        }
+        let mut best: BinaryHeap<Candidate> = BinaryHeap::with_capacity(k + 1);
+        for (pos, node) in self.nodes.iter().enumerate() {
+            if node.deleted || !filter.is_none_or(|f| f.matches(node.payload.as_ref())) {
+                continue;
+            }
+            let c = Candidate {
+                distance: self.dist_to_node(query, pos as u32),
+                node: pos as u32,
+            };
+            if best.len() < k {
+                best.push(c);
+            } else if c < *best.peek().expect("heap holds k > 0 entries") {
+                best.pop();
+                best.push(c);
+            }
+        }
+        Ok(best
+            .into_sorted_vec()
+            .into_iter()
+            .map(|c| SearchResult {
+                id: self.nodes[c.node as usize].id,
+                distance: c.distance,
+            })
+            .collect())
+    }
+
+    /// Iterate `(id, vector, payload)` over live vectors in arena order.
+    /// The order is deterministic for an unmodified index.
+    pub fn iter_live(&self) -> impl Iterator<Item = (VectorId, &Vector, Option<&Payload>)> + '_ {
+        self.nodes
+            .iter()
+            .filter(|n| !n.deleted)
+            .map(|n| (n.id, &n.vector, n.payload.as_ref()))
+    }
+
+    fn search_inner<S: TraceSink>(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: usize,
+        filter: Option<&Filter>,
+        sink: &mut S,
+    ) -> Result<Vec<SearchResult>> {
         if k == 0 {
             return Err(VexError::InvalidK);
         }
@@ -179,8 +397,10 @@ impl HnswIndex {
         // Greedy descent through the sparse upper layers (beam width 1)...
         let mut ep = entry;
         let mut ep_dist = self.dist_to_node(query, ep);
+        sink.distance_eval();
+        sink.entry(ep, ep_dist);
         for layer in (1..=self.max_layer).rev() {
-            (ep, ep_dist) = self.greedy_closest(query, ep, ep_dist, layer);
+            (ep, ep_dist) = self.greedy_closest(query, ep, ep_dist, layer, sink);
         }
 
         // ...then the real beam search on the dense bottom layer.
@@ -189,7 +409,11 @@ impl HnswIndex {
             let node = &self.nodes[n as usize];
             !node.deleted && filter.is_none_or(|f| f.matches(node.payload.as_ref()))
         };
-        let found = self.search_layer(query, ep, ep_dist, ef, 0, admit);
+        let start = Candidate {
+            distance: ep_dist,
+            node: ep,
+        };
+        let found = self.search_layer(query, start, ef, 0, admit, sink);
         Ok(found
             .into_iter()
             .take(k)
@@ -225,18 +449,21 @@ impl HnswIndex {
     /// Hill-climb on one layer: repeatedly move to the closest neighbor until
     /// no neighbor improves. This is `search_layer` with ef = 1, special-cased
     /// because the upper layers never need the heaps.
-    fn greedy_closest(
+    fn greedy_closest<S: TraceSink>(
         &self,
         query: &[f32],
         mut ep: u32,
         mut ep_dist: f32,
         layer: usize,
+        sink: &mut S,
     ) -> (u32, f32) {
         loop {
             let mut improved = false;
             for &nb in &self.nodes[ep as usize].neighbors[layer] {
                 let d = self.dist_to_node(query, nb);
+                sink.distance_eval();
                 if d < ep_dist {
+                    sink.descent_hop(layer, ep, nb, d);
                     ep = nb;
                     ep_dist = d;
                     improved = true;
@@ -254,26 +481,22 @@ impl HnswIndex {
     /// worse than the worst kept result. Non-admitted nodes (tombstones,
     /// filter misses) are traversed — they route the beam — but never
     /// occupy result slots. Returns results sorted ascending by distance.
-    fn search_layer<F: Fn(u32) -> bool>(
+    fn search_layer<F: Fn(u32) -> bool, S: TraceSink>(
         &self,
         query: &[f32],
-        ep: u32,
-        ep_dist: f32,
+        start: Candidate,
         ef: usize,
         layer: usize,
         admit: F,
+        sink: &mut S,
     ) -> Vec<Candidate> {
         let mut visited = vec![false; self.nodes.len()];
-        visited[ep as usize] = true;
+        visited[start.node as usize] = true;
 
-        let start = Candidate {
-            distance: ep_dist,
-            node: ep,
-        };
         let mut frontier = BinaryHeap::new();
         frontier.push(Reverse(start));
         let mut best: BinaryHeap<Candidate> = BinaryHeap::new();
-        if admit(ep) {
+        if admit(start.node) {
             best.push(start);
         }
 
@@ -290,6 +513,7 @@ impl HnswIndex {
                     continue;
                 }
                 let d = self.dist_to_node(query, nb);
+                sink.distance_eval();
                 let worst = best.peek().map_or(f32::INFINITY, |w| w.distance);
                 if best.len() < ef || d < worst {
                     let c = Candidate {
@@ -302,7 +526,12 @@ impl HnswIndex {
                         if best.len() > ef {
                             best.pop();
                         }
+                        sink.beam_edge(current.node, nb, d, BeamStatus::Admitted);
+                    } else {
+                        sink.beam_edge(current.node, nb, d, BeamStatus::Routed);
                     }
+                } else {
+                    sink.beam_edge(current.node, nb, d, BeamStatus::Rejected);
                 }
             }
         }
@@ -410,7 +639,7 @@ impl Index for HnswIndex {
         let mut ep = entry;
         let mut ep_dist = self.dist_to_node(&query, ep);
         for layer in ((level + 1)..=self.max_layer).rev() {
-            (ep, ep_dist) = self.greedy_closest(&query, ep, ep_dist, layer);
+            (ep, ep_dist) = self.greedy_closest(&query, ep, ep_dist, layer, &mut NoopSink);
         }
 
         // Phase 2: on each layer the node lives on, beam-search for
@@ -420,11 +649,14 @@ impl Index for HnswIndex {
             // and linking to them keeps the graph connected.
             let cands = self.search_layer(
                 &query,
-                ep,
-                ep_dist,
+                Candidate {
+                    distance: ep_dist,
+                    node: ep,
+                },
                 self.config.ef_construction,
                 layer,
                 |_| true,
+                &mut NoopSink,
             );
             let chosen = self.select_neighbors(&cands, self.config.m);
             let m_max = if layer == 0 {
@@ -703,6 +935,164 @@ mod tests {
             .search_filtered_with_ef(&random_vectors(1, 8, 1)[0], 5, 32, Some(&none))
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn traced_search_matches_plain_search() {
+        let vectors = random_vectors(500, 8, 11);
+        let mut idx = HnswIndex::with_defaults(8, DistanceMetric::Cosine);
+        for (i, vec) in vectors.iter().enumerate() {
+            idx.add(VectorId(i as u64), Vector::from_vec(vec.clone()))
+                .unwrap();
+        }
+        for q in random_vectors(20, 8, 311) {
+            for ef in [10, 64, 200] {
+                let plain = idx.search_with_ef(&q, 10, ef).unwrap();
+                let (traced, trace) = idx.search_traced(&q, 10, ef, None).unwrap();
+                assert_eq!(plain, traced, "tracing changed the results at ef={ef}");
+
+                // Trace invariants.
+                assert!(trace.entry_id.is_some());
+                assert_eq!(trace.visited, trace.beam.len() + 1);
+                assert!(trace.distance_evals >= trace.visited);
+                for hop in &trace.descent {
+                    assert!(hop.layer >= 1, "descent hops live on upper layers");
+                    assert!((hop.to as usize) < vectors.len());
+                }
+                for edge in &trace.beam {
+                    assert!((edge.to as usize) < vectors.len());
+                }
+                // Every result must have been admitted by the beam, or be
+                // the node the beam started from (the descent's last stop,
+                // which enters the result heap without a beam edge).
+                let beam_start = trace.descent.last().map(|h| h.to).or(trace.entry_id);
+                let admitted: std::collections::HashSet<u64> = trace
+                    .beam
+                    .iter()
+                    .filter(|e| e.status == BeamStatus::Admitted)
+                    .map(|e| e.to)
+                    .chain(beam_start)
+                    .collect();
+                for r in &traced {
+                    assert!(admitted.contains(&r.id.0), "result {} never admitted", r.id);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn traced_filtered_search_marks_routed_nodes() {
+        use serde_json::json;
+        let vectors = random_vectors(600, 8, 23);
+        let mut idx = HnswIndex::with_defaults(8, DistanceMetric::L2);
+        for (i, vec) in vectors.iter().enumerate() {
+            idx.add_with_payload(
+                VectorId(i as u64),
+                Vector::from_vec(vec.clone()),
+                Some(json!({"bucket": i % 10})),
+            )
+            .unwrap();
+        }
+        let filter = crate::payload::Filter::Eq {
+            key: "bucket".into(),
+            value: json!(4),
+        };
+        let q = &random_vectors(1, 8, 90)[0];
+        let plain = idx
+            .search_filtered_with_ef(q, 10, 64, Some(&filter))
+            .unwrap();
+        let (traced, trace) = idx.search_traced(q, 10, 64, Some(&filter)).unwrap();
+        assert_eq!(plain, traced);
+        // A 10% filter must route through non-matching nodes...
+        assert!(
+            trace.beam.iter().any(|e| e.status == BeamStatus::Routed),
+            "selective filter produced no routed nodes"
+        );
+        // ...and admitted nodes must all match the filter.
+        for e in &trace.beam {
+            if e.status == BeamStatus::Admitted {
+                assert_eq!(e.to % 10, 4, "admitted node {} violates the filter", e.to);
+            }
+        }
+        // The trace serializes for wire consumers (wasm, HTTP explain).
+        let json = serde_json::to_value(&trace).unwrap();
+        assert!(json["beam"].as_array().unwrap().len() == trace.beam.len());
+        assert!(json["beam"][0]["status"].is_string());
+    }
+
+    #[test]
+    fn traced_search_on_empty_index() {
+        let idx = HnswIndex::with_defaults(4, DistanceMetric::L2);
+        let (results, trace) = idx.search_traced(&[0.0; 4], 5, 32, None).unwrap();
+        assert!(results.is_empty());
+        assert_eq!(trace.entry_id, None);
+        assert_eq!(trace.visited, 0);
+        assert_eq!(trace.distance_evals, 0);
+        assert!(trace.descent.is_empty() && trace.beam.is_empty());
+    }
+
+    #[test]
+    fn search_exact_matches_flat_ground_truth() {
+        use serde_json::json;
+        let vectors = random_vectors(400, 8, 17);
+        let mut hnsw = HnswIndex::with_defaults(8, DistanceMetric::L2);
+        let mut flat = FlatIndex::new(8, DistanceMetric::L2);
+        for (i, vec) in vectors.iter().enumerate() {
+            let payload = Some(json!({"bucket": i % 5}));
+            hnsw.add_with_payload(
+                VectorId(i as u64),
+                Vector::from_vec(vec.clone()),
+                payload.clone(),
+            )
+            .unwrap();
+            flat.add_with_payload(VectorId(i as u64), Vector::from_vec(vec.clone()), payload)
+                .unwrap();
+        }
+        // Tombstones must be excluded from the exact scan.
+        for i in 0..40u64 {
+            hnsw.remove(VectorId(i)).unwrap();
+            flat.remove(VectorId(i)).unwrap();
+        }
+        let filter = crate::payload::Filter::Eq {
+            key: "bucket".into(),
+            value: json!(2),
+        };
+        for q in random_vectors(10, 8, 71) {
+            assert_eq!(
+                hnsw.search_exact(&q, 10, None).unwrap(),
+                flat.search(&q, 10).unwrap(),
+                "exact scan diverged from FlatIndex"
+            );
+            assert_eq!(
+                hnsw.search_exact(&q, 10, Some(&filter)).unwrap(),
+                flat.search_filtered(&q, 10, Some(&filter)).unwrap(),
+                "filtered exact scan diverged from FlatIndex"
+            );
+        }
+        // Same edge-case contract as every other search path.
+        assert!(matches!(
+            hnsw.search_exact(&random_vectors(1, 8, 1)[0], 0, None),
+            Err(VexError::InvalidK)
+        ));
+        assert!(matches!(
+            hnsw.search_exact(&[0.0; 3], 5, None),
+            Err(VexError::DimensionMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn iter_live_skips_tombstones() {
+        let mut idx = HnswIndex::with_defaults(2, DistanceMetric::L2);
+        for i in 0..10u64 {
+            idx.add(VectorId(i), v(&[i as f32, 0.0])).unwrap();
+        }
+        idx.remove(VectorId(3)).unwrap();
+        idx.remove(VectorId(7)).unwrap();
+        let ids: Vec<u64> = idx.iter_live().map(|(id, _, _)| id.0).collect();
+        assert_eq!(ids, vec![0, 1, 2, 4, 5, 6, 8, 9]);
+        for (id, vec, _) in idx.iter_live() {
+            assert_eq!(vec.as_slice()[0], id.0 as f32);
+        }
     }
 
     proptest! {

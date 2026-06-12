@@ -14,6 +14,16 @@ export class VexIndex {
     add(id: bigint, vector: Float32Array, payload_json?: string | null): void;
     dim(): number;
     /**
+     * Ids of every live vector in storage order (a `BigUint64Array`),
+     * parallel to `exportVectors`.
+     */
+    exportIds(): BigUint64Array;
+    /**
+     * Every live vector as one flat dim-strided `Float32Array`, in
+     * `exportIds` order — one copy across the wasm boundary instead of n.
+     */
+    exportVectors(): Float32Array;
+    /**
      * Load an index from `.vex` snapshot bytes (e.g. a `fetch`ed file).
      */
     static fromSnapshot(bytes: Uint8Array): VexIndex;
@@ -33,6 +43,18 @@ export class VexIndex {
      * Returns `[{id, distance, payload?}, ...]` sorted ascending.
      */
     search(query: Float32Array, k: number, ef: number, filter_json?: string | null): any;
+    /**
+     * Exact top-k by brute-force scan over every live vector — ground
+     * truth for measuring HNSW recall in the page itself.
+     */
+    searchExact(query: Float32Array, k: number, filter_json?: string | null): any;
+    /**
+     * Like `search`, but also returns the full traversal record:
+     * `{hits, trace: {entry_id, max_layer, descent, beam, visited,
+     * distance_evals}}`. The hits are identical to `search` with the same
+     * arguments — the trace observes the traversal, it never alters it.
+     */
+    searchTrace(query: Float32Array, k: number, ef: number, filter_json?: string | null): any;
     /**
      * `{index, metric, dim, count}`.
      */
@@ -55,12 +77,16 @@ export interface InitOutput {
     readonly __wbg_vexindex_free: (a: number, b: number) => void;
     readonly vexindex_add: (a: number, b: bigint, c: number, d: number, e: number, f: number) => [number, number];
     readonly vexindex_dim: (a: number) => number;
+    readonly vexindex_exportIds: (a: number) => [number, number];
+    readonly vexindex_exportVectors: (a: number) => [number, number];
     readonly vexindex_fromSnapshot: (a: number, b: number) => [number, number, number];
     readonly vexindex_isEmpty: (a: number) => number;
     readonly vexindex_len: (a: number) => number;
     readonly vexindex_newHnsw: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
     readonly vexindex_payloadOf: (a: number, b: bigint) => [number, number, number];
     readonly vexindex_search: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number];
+    readonly vexindex_searchExact: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
+    readonly vexindex_searchTrace: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number];
     readonly vexindex_stats: (a: number) => [number, number, number];
     readonly vexindex_toSnapshot: (a: number) => [number, number, number, number];
     readonly vexindex_vectorOf: (a: number, b: bigint) => [number, number];
