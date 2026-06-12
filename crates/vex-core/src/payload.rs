@@ -45,6 +45,13 @@ pub enum Filter {
         key: String,
         values: Vec<Value>,
     },
+    /// For array fields: any element equals the value. For scalar fields:
+    /// behaves like `Eq`. (`{"genres": ["Action", "Drama"]}` matches
+    /// `contains {key: "genres", value: "Drama"}`.)
+    Contains {
+        key: String,
+        value: Value,
+    },
     And(Vec<Filter>),
     Or(Vec<Filter>),
     Not(Box<Filter>),
@@ -63,6 +70,12 @@ impl Filter {
             Filter::In { key, values } => payload
                 .and_then(|p| p.get(key))
                 .is_some_and(|v| values.contains(v)),
+            Filter::Contains { key, value } => {
+                payload.and_then(|p| p.get(key)).is_some_and(|v| match v {
+                    Value::Array(items) => items.contains(value),
+                    scalar => scalar == value,
+                })
+            }
             Filter::And(fs) => fs.iter().all(|f| f.matches(payload)),
             Filter::Or(fs) => fs.iter().any(|f| f.matches(payload)),
             Filter::Not(f) => !f.matches(payload),
@@ -115,6 +128,23 @@ mod tests {
         assert!(f.matches(Some(&json!({"color": "red"}))));
         assert!(!f.matches(Some(&json!({"color": "red", "sold_out": true}))));
         assert!(!f.matches(Some(&json!({"color": "green"}))));
+    }
+
+    #[test]
+    fn contains_matches_arrays_and_scalars() {
+        let f = Filter::Contains {
+            key: "genres".into(),
+            value: json!("Drama"),
+        };
+        assert!(f.matches(Some(&json!({"genres": ["Action", "Drama"]}))));
+        assert!(!f.matches(Some(&json!({"genres": ["Action", "Comedy"]}))));
+        // Scalar fallback behaves like Eq.
+        assert!(f.matches(Some(&json!({"genres": "Drama"}))));
+        assert!(!f.matches(None));
+        // Wire format round-trips.
+        let parsed: Filter =
+            serde_json::from_str(r#"{"contains":{"key":"genres","value":"Drama"}}"#).unwrap();
+        assert_eq!(parsed, f);
     }
 
     #[test]

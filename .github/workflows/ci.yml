@@ -31,3 +31,19 @@ jobs:
 
       - name: test
         run: cargo test --workspace
+
+  wasm:
+    name: wasm32 build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain with wasm target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: check vex-wasm for wasm32
+        run: cargo check -p vex-wasm --target wasm32-unknown-unknown

@@ -487,6 +487,17 @@ impl Index for HnswIndex {
         })
     }
 
+    fn vector(&self, id: VectorId) -> Option<&Vector> {
+        self.id_to_pos.get(&id).and_then(|&pos| {
+            let node = &self.nodes[pos as usize];
+            if node.deleted {
+                None
+            } else {
+                Some(&node.vector)
+            }
+        })
+    }
+
     fn len(&self) -> usize {
         self.live_count
     }
@@ -590,6 +601,15 @@ mod tests {
                 assert!(r.id.0 >= 100, "tombstoned id {} surfaced", r.id);
             }
         }
+    }
+
+    #[test]
+    fn vector_accessor_respects_tombstones() {
+        let mut idx = HnswIndex::with_defaults(2, DistanceMetric::L2);
+        idx.add(VectorId(1), v(&[3.0, 4.0])).unwrap();
+        assert_eq!(idx.vector(VectorId(1)).unwrap().as_slice(), &[3.0, 4.0]);
+        idx.remove(VectorId(1)).unwrap();
+        assert!(idx.vector(VectorId(1)).is_none());
     }
 
     #[test]

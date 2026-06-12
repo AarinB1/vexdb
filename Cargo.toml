@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/vex-core", "crates/vex-cli", "crates/vex-server"]
+members = ["crates/vex-core", "crates/vex-cli", "crates/vex-server", "crates/vex-wasm"]
 
 [workspace.package]
 edition = "2021"

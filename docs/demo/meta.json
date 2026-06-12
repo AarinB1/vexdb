@@ -1,0 +1,33 @@
+{
+  "dataset": "Pablinho/movies-dataset",
+  "model": "Xenova/all-MiniLM-L6-v2",
+  "metric": "cosine",
+  "dim": 384,
+  "count": 5000,
+  "genres": [
+    "Drama",
+    "Comedy",
+    "Action",
+    "Thriller",
+    "Adventure",
+    "Family",
+    "Horror",
+    "Science Fiction",
+    "Fantasy",
+    "Animation",
+    "Crime",
+    "Romance",
+    "Mystery",
+    "History",
+    "Music",
+    "War",
+    "TV Movie",
+    "Documentary",
+    "Western"
+  ],
+  "yearRange": [
+    1931,
+    2024
+  ],
+  "built": "2026-06-12"
+}
