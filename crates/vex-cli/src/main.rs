@@ -1,11 +1,13 @@
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use serde::Deserialize;
-use vex_core::{DistanceMetric, FlatIndex, Index, Vector, VectorId};
+use vex_core::{DistanceMetric, FlatIndex, HnswConfig, HnswIndex, Index, Vector, VectorId};
 
 #[derive(Parser, Debug)]
 #[command(name = "vex", version, about = "vex vector database CLI", long_about = None)]
@@ -25,7 +27,7 @@ enum Command {
         #[arg(short = 'm', long, default_value = "l2")]
         metric: String,
     },
-    /// Load JSONL into a FlatIndex and run a search against `--query`.
+    /// Load JSONL into an index and run a search against `--query`.
     Query {
         #[arg(short, long)]
         input: PathBuf,
@@ -35,6 +37,37 @@ enum Command {
         k: usize,
         #[arg(short = 'm', long, default_value = "l2")]
         metric: String,
+        /// Index to search with: "flat" (exact) or "hnsw" (approximate).
+        #[arg(long, default_value = "flat")]
+        index: String,
+    },
+    /// Benchmark HNSW against FlatIndex ground truth on synthetic vectors:
+    /// reports build time, then recall@k and QPS for each ef_search value.
+    Bench {
+        /// Number of vectors to index.
+        #[arg(short, long, default_value_t = 10_000)]
+        n: usize,
+        /// Vector dimension.
+        #[arg(short, long, default_value_t = 128)]
+        dim: usize,
+        /// Number of query vectors.
+        #[arg(short, long, default_value_t = 100)]
+        queries: usize,
+        #[arg(short, long, default_value_t = 10)]
+        k: usize,
+        #[arg(short = 'm', long, default_value = "l2")]
+        metric: String,
+        /// HNSW M (max neighbors per layer).
+        #[arg(long, default_value_t = 16)]
+        hnsw_m: usize,
+        #[arg(long, default_value_t = 200)]
+        ef_construction: usize,
+        /// Comma-separated ef_search values to sweep.
+        #[arg(long, default_value = "10,20,40,80,160,320")]
+        ef_search: String,
+        /// RNG seed for data generation.
+        #[arg(long, default_value_t = 42)]
+        seed: u64,
     },
 }
 
@@ -62,16 +95,169 @@ fn main() -> Result<()> {
             query,
             k,
             metric,
+            index,
         } => {
             let metric: DistanceMetric = metric.parse().map_err(|e: String| anyhow!(e))?;
             let q = parse_query(&query)?;
-            let index = build_index(&input, q.len(), metric)?;
-            let results = index.search(&q, k)?;
+            let results = match index.as_str() {
+                "flat" => build_index(&input, q.len(), metric)?.search(&q, k)?,
+                "hnsw" => {
+                    let mut idx = HnswIndex::with_defaults(q.len(), metric);
+                    load_into(&input, &mut idx)?;
+                    idx.search(&q, k)?
+                }
+                other => return Err(anyhow!("unknown index type: {other} (expected flat|hnsw)")),
+            };
             println!("top {} results:", results.len());
             for r in results {
                 println!("  id={} distance={:.6}", r.id, r.distance);
             }
         }
+        Command::Bench {
+            n,
+            dim,
+            queries,
+            k,
+            metric,
+            hnsw_m,
+            ef_construction,
+            ef_search,
+            seed,
+        } => {
+            let metric: DistanceMetric = metric.parse().map_err(|e: String| anyhow!(e))?;
+            let efs = ef_search
+                .split(',')
+                .map(|t| t.trim().parse::<usize>().context("invalid ef_search value"))
+                .collect::<Result<Vec<_>>>()?;
+            run_bench(BenchParams {
+                n,
+                dim,
+                queries,
+                k,
+                metric,
+                m: hnsw_m,
+                ef_construction,
+                ef_search: efs,
+                seed,
+            })?;
+        }
+    }
+    Ok(())
+}
+
+struct BenchParams {
+    n: usize,
+    dim: usize,
+    queries: usize,
+    k: usize,
+    metric: DistanceMetric,
+    m: usize,
+    ef_construction: usize,
+    ef_search: Vec<usize>,
+    seed: u64,
+}
+
+/// splitmix64-based deterministic vector generator.
+struct Rng(u64);
+
+impl Rng {
+    fn next_f32(&mut self) -> f32 {
+        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^= z >> 31;
+        ((z >> 40) as f32) / ((1u64 << 24) as f32) * 2.0 - 1.0
+    }
+
+    fn vector(&mut self, dim: usize) -> Vec<f32> {
+        (0..dim).map(|_| self.next_f32()).collect()
+    }
+}
+
+fn run_bench(p: BenchParams) -> Result<()> {
+    println!(
+        "dataset: {} synthetic vectors, dim {}, {} queries, k={}, metric {:?}",
+        p.n, p.dim, p.queries, p.k, p.metric
+    );
+    let mut rng = Rng(p.seed);
+    let vectors: Vec<Vec<f32>> = (0..p.n).map(|_| rng.vector(p.dim)).collect();
+    let queries: Vec<Vec<f32>> = (0..p.queries).map(|_| rng.vector(p.dim)).collect();
+
+    // Flat baseline: ground truth (recall 1.0 by definition) + QPS floor.
+    let start = Instant::now();
+    let mut flat = FlatIndex::new(p.dim, p.metric);
+    for (i, v) in vectors.iter().enumerate() {
+        flat.add(VectorId(i as u64), Vector::from_vec(v.clone()))?;
+    }
+    let flat_build = start.elapsed();
+
+    let start = Instant::now();
+    let truth: Vec<HashSet<VectorId>> = queries
+        .iter()
+        .map(|q| Ok(flat.search(q, p.k)?.iter().map(|r| r.id).collect()))
+        .collect::<Result<_>>()?;
+    let flat_query = start.elapsed();
+    let flat_qps = p.queries as f64 / flat_query.as_secs_f64();
+
+    let start = Instant::now();
+    let mut hnsw = HnswIndex::new(
+        p.dim,
+        p.metric,
+        HnswConfig {
+            m: p.m,
+            ef_construction: p.ef_construction,
+            ef_search: p.k, // overridden per sweep below
+            seed: p.seed,
+        },
+    );
+    for (i, v) in vectors.iter().enumerate() {
+        hnsw.add(VectorId(i as u64), Vector::from_vec(v.clone()))?;
+    }
+    let hnsw_build = start.elapsed();
+
+    println!(
+        "build:   flat {:>10.3?}   hnsw(M={}, efc={}) {:>10.3?}",
+        flat_build, p.m, p.ef_construction, hnsw_build
+    );
+    println!();
+    println!(
+        "{:>10} {:>12} {:>12} {:>10}",
+        "ef_search", "recall@k", "QPS", "vs flat"
+    );
+    println!(
+        "{:>10} {:>12} {:>12.0} {:>9.1}x",
+        "flat", "1.000", flat_qps, 1.0
+    );
+    for &ef in &p.ef_search {
+        let start = Instant::now();
+        let results: Vec<Vec<VectorId>> = queries
+            .iter()
+            .map(|q| {
+                Ok(hnsw
+                    .search_with_ef(q, p.k, ef)?
+                    .iter()
+                    .map(|r| r.id)
+                    .collect())
+            })
+            .collect::<Result<_>>()?;
+        let elapsed = start.elapsed();
+        let qps = p.queries as f64 / elapsed.as_secs_f64();
+
+        let hits: usize = results
+            .iter()
+            .zip(&truth)
+            .map(|(res, t)| res.iter().filter(|id| t.contains(id)).count())
+            .sum();
+        let total: usize = truth.iter().map(|t| t.len()).sum();
+        let recall = hits as f64 / total as f64;
+        println!(
+            "{:>10} {:>12.3} {:>12.0} {:>9.1}x",
+            ef,
+            recall,
+            qps,
+            qps / flat_qps
+        );
     }
     Ok(())
 }
@@ -83,9 +269,15 @@ fn parse_query(s: &str) -> Result<Vec<f32>> {
 }
 
 fn build_index(path: &Path, dim: usize, metric: DistanceMetric) -> Result<FlatIndex> {
+    let mut index = FlatIndex::new(dim, metric);
+    load_into(path, &mut index)?;
+    Ok(index)
+}
+
+fn load_into<I: Index>(path: &Path, index: &mut I) -> Result<()> {
     let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let reader = BufReader::new(file);
-    let mut index = FlatIndex::new(dim, metric);
+    let dim = index.dim();
     for (lineno, line) in reader.lines().enumerate() {
         let line = line?;
         if line.trim().is_empty() {
@@ -99,5 +291,5 @@ fn build_index(path: &Path, dim: usize, metric: DistanceMetric) -> Result<FlatIn
             .add(VectorId(rec.id), vector)
             .with_context(|| format!("adding vector at line {}", lineno + 1))?;
     }
-    Ok(index)
+    Ok(())
 }
