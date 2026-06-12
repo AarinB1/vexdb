@@ -213,6 +213,13 @@ impl Index for AnyIndex {
         }
     }
 
+    fn vector(&self, id: VectorId) -> Option<&Vector> {
+        match self {
+            AnyIndex::Flat(i) => i.vector(id),
+            AnyIndex::Hnsw(i) => i.vector(id),
+        }
+    }
+
     fn len(&self) -> usize {
         match self {
             AnyIndex::Flat(i) => i.len(),

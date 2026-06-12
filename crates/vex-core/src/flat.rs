@@ -154,6 +154,12 @@ impl Index for FlatIndex {
             .and_then(|&pos| self.entries[pos].payload.as_ref())
     }
 
+    fn vector(&self, id: VectorId) -> Option<&Vector> {
+        self.id_to_pos
+            .get(&id)
+            .map(|&pos| &self.entries[pos].vector)
+    }
+
     fn len(&self) -> usize {
         self.entries.len()
     }
@@ -301,6 +307,16 @@ mod tests {
         assert_eq!(idx.payload(VectorId(1)), Some(&json!({"tag": "a"})));
         assert_eq!(idx.payload(VectorId(2)), None);
         assert_eq!(idx.payload(VectorId(99)), None);
+    }
+
+    #[test]
+    fn vector_accessor_returns_stored_vector() {
+        let mut idx = FlatIndex::new(2, DistanceMetric::L2);
+        idx.add(VectorId(1), v(&[1.0, 2.0])).unwrap();
+        assert_eq!(idx.vector(VectorId(1)).unwrap().as_slice(), &[1.0, 2.0]);
+        assert!(idx.vector(VectorId(9)).is_none());
+        idx.remove(VectorId(1)).unwrap();
+        assert!(idx.vector(VectorId(1)).is_none());
     }
 
     #[test]

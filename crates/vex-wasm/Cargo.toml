@@ -1,0 +1,25 @@
+[package]
+name = "vex-wasm"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "WebAssembly bindings for the vex vector database core."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# default-features = false drops rayon: wasm32-unknown-unknown has no threads.
+vex-core = { path = "../vex-core", default-features = false }
+wasm-bindgen = "0.2"
+serde.workspace = true
+serde_json.workspace = true
+serde-wasm-bindgen = "0.6"
+console_error_panic_hook = "0.1"
+
+[package.metadata.wasm-pack.profile.release]
+# wasm-opt is not available in every build environment; the size win is
+# modest for this crate. Disable for reproducible builds.
+wasm-opt = false

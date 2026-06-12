@@ -15,6 +15,39 @@ kernels, not the graph).
 | `vex-core`   | The engine: `FlatIndex` (exact), `HnswIndex` (approximate), distance metrics with AVX2 kernels, payload filters, `.vex` snapshot format. Synchronous, embeddable; `default-features = false` drops rayon for a lean build. |
 | `vex-cli`    | `vex` binary: `ingest`, `build` (JSONL → `.vex`), `query` (JSONL or snapshot), `bench` (recall/QPS harness). |
 | `vex-server` | `vex-server` binary: HTTP API + demo console over a directory of snapshots. All async deps (tokio/axum/tower) are isolated here. |
+| `vex-wasm`   | wasm-bindgen bindings: the whole engine compiled to a 275 KB WebAssembly module. Powers the landing-page demo — snapshot loading, HNSW search, and filters running entirely in the browser. |
+
+## The browser demo (no server)
+
+The landing page (`docs/index.html`, GitHub Pages-ready) embeds a live demo:
+vex-core compiled to WebAssembly, searching **5,000 movie-plot embeddings**
+(all-MiniLM-L6-v2, 384-dim, cosine) inside the visitor's tab. "Surprise me"
+and "more like this" use stored vectors and need no model; typed queries
+lazy-load the same MiniLM model via transformers.js so the query embeds
+locally too. Measured in-browser: snapshot parse ~50 ms, HNSW search ~2–4 ms,
+query embedding ~200 ms. There is no backend — search, filters, and the
+snapshot parser are the same Rust code paths as the native build.
+
+Run it locally:
+
+```sh
+python3 -m http.server 3000 --directory docs   # → http://localhost:3000
+```
+
+Rebuild the wasm module after core changes (needs `wasm32-unknown-unknown`
+target + [wasm-pack](https://rustwasm.github.io/wasm-pack/)):
+
+```sh
+cd crates/vex-wasm && wasm-pack build --release --target web --out-dir ../../docs/demo/pkg
+```
+
+Regenerate the dataset (fetches the movie corpus, embeds with MiniLM in
+Node, bakes the snapshot with `vex build`):
+
+```sh
+cd scripts && npm install && cd ..
+node scripts/build-demo-data.mjs --n 5000
+```
 
 ## Quick start: the server
 
@@ -159,6 +192,7 @@ and a "done when":
 7. **Metadata & filtering** — payloads + traversal-time filters ✅
 8. **SIMD** — AVX2 kernels, scalar oracle ✅
 9. **The faiss benchmark** — [BENCHMARKS.md](BENCHMARKS.md) ✅
+10. **The browser build** — vex-wasm + the in-tab semantic search demo ✅
 
 Future work, in rough order of payoff: batched/binary query protocol (the
 HTTP overhead measurement makes the case), mmap-backed snapshot loading,

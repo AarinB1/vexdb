@@ -56,6 +56,10 @@ pub trait Index {
     /// The payload stored with a live vector, if any.
     fn payload(&self, id: VectorId) -> Option<&Payload>;
 
+    /// The stored vector for a live id, if present. Useful for
+    /// "more like this" queries: search again with a result's own vector.
+    fn vector(&self, id: VectorId) -> Option<&Vector>;
+
     fn len(&self) -> usize;
     fn is_empty(&self) -> bool {
         self.len() == 0

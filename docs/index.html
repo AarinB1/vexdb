@@ -237,7 +237,7 @@
   }
 
   /* ---- sections ---- */
-  section { padding: 110px 0; position: relative; }
+  section { padding: 110px 0; position: relative; scroll-margin-top: 50px; }
   .sec-kicker {
     font-family: var(--mono);
     font-size: 12px;
@@ -456,6 +456,164 @@
   }
   .reveal.in { opacity: 1; transform: none; }
 
+  /* ---- live demo ---- */
+  .demo-shell {
+    margin-top: 48px;
+    background: var(--bg-raise);
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    padding: 30px;
+    box-shadow: 0 30px 80px -40px rgba(0, 0, 0, 0.8), 0 0 80px -50px var(--glow);
+  }
+  .boot-zone { text-align: center; padding: 36px 12px; }
+  .boot-zone p { color: var(--ink-dim); font-size: 14px; max-width: 52ch; margin: 0 auto 24px; }
+  .boot-btn {
+    font-family: var(--mono);
+    font-size: 14px;
+    cursor: pointer;
+    background: var(--ink);
+    color: var(--bg);
+    border: 0;
+    padding: 14px 32px;
+    border-radius: 100px;
+    transition: transform 0.18s, box-shadow 0.18s;
+  }
+  .boot-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 32px var(--glow); }
+  .boot-btn:disabled { opacity: 0.5; cursor: default; transform: none; box-shadow: none; }
+  .progress {
+    height: 3px;
+    border-radius: 3px;
+    background: rgba(236, 233, 226, 0.08);
+    margin: 22px auto 0;
+    max-width: 380px;
+    overflow: hidden;
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  .progress.on { opacity: 1; }
+  .progress i {
+    display: block;
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    transition: width 0.15s ease;
+  }
+  .demo-status { font-family: var(--mono); font-size: 12px; color: var(--ink-faint); margin-top: 12px; min-height: 18px; }
+  .demo-status .ok { color: var(--accent-2); }
+
+  .demo-main { display: none; }
+  .demo-main.on { display: block; }
+  .stats-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 22px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink-faint);
+    padding-bottom: 18px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 20px;
+  }
+  .stats-strip b { color: var(--accent-2); font-weight: 400; }
+  .demo-controls { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; margin-bottom: 12px; }
+  .demo-controls input[type="text"] {
+    width: 100%;
+    background: var(--bg);
+    color: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: 100px;
+    font-family: var(--sans);
+    font-size: 14.5px;
+    padding: 12px 20px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .demo-controls input[type="text"]:focus { border-color: var(--accent); }
+  .demo-btn {
+    font-family: var(--mono);
+    font-size: 13px;
+    cursor: pointer;
+    background: var(--ink);
+    color: var(--bg);
+    border: 0;
+    padding: 0 24px;
+    border-radius: 100px;
+    transition: transform 0.15s, box-shadow 0.15s;
+    white-space: nowrap;
+  }
+  .demo-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 24px var(--glow); }
+  .demo-btn.ghost { background: transparent; color: var(--ink); border: 1px solid rgba(236, 233, 226, 0.22); }
+  .demo-btn.ghost:hover { border-color: var(--accent); box-shadow: none; }
+  .demo-btn:disabled { opacity: 0.45; cursor: default; transform: none; box-shadow: none; }
+  .demo-knobs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 14px 26px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink-faint);
+    margin-bottom: 8px;
+  }
+  .demo-knobs select {
+    background: var(--bg);
+    color: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    padding: 7px 10px;
+    outline: none;
+  }
+  .demo-knobs input[type="range"] { accent-color: var(--accent); width: 130px; vertical-align: middle; }
+  .chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 4px; }
+  .chip {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--ink-dim);
+    border: 1px solid var(--line);
+    border-radius: 100px;
+    padding: 5px 14px;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+    background: none;
+  }
+  .chip:hover { border-color: var(--accent-2); color: var(--accent-2); }
+  .lat-strip { font-family: var(--mono); font-size: 12px; color: var(--ink-faint); margin: 14px 0 4px; min-height: 18px; }
+  .lat-strip b { color: var(--accent-2); font-weight: 400; }
+  .hits { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; margin-top: 14px; }
+  .hit {
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px;
+    transition: border-color 0.2s, transform 0.2s;
+  }
+  .hit:hover { border-color: rgba(200, 184, 255, 0.35); transform: translateY(-2px); }
+  .hit h4 { font-family: var(--serif); font-weight: 400; font-size: 19px; line-height: 1.25; }
+  .hit .yr { color: var(--ink-faint); font-size: 14px; }
+  .hit .meta-line { font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint); margin: 7px 0 9px; letter-spacing: 0.04em; }
+  .hit .meta-line b { color: var(--accent-2); font-weight: 400; }
+  .hit p { color: var(--ink-dim); font-size: 12.5px; line-height: 1.55; }
+  .hit .more {
+    display: inline-block;
+    margin-top: 11px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: 0;
+  }
+  .hit .more:hover { text-decoration: underline; }
+  .demo-err { color: #ff8a8a; font-family: var(--mono); font-size: 12.5px; margin-top: 12px; white-space: pre-wrap; }
+
+  @media (max-width: 760px) {
+    .demo-controls { grid-template-columns: 1fr; }
+    .demo-btn { padding: 12px 24px; }
+  }
+
   @media (max-width: 760px) {
     .bench-flex { grid-template-columns: 1fr; }
     .phase { grid-template-columns: 48px 1fr; }
@@ -476,6 +634,7 @@
   <div class="wrap nav-inner">
     <a class="logo" href="#"><span class="tick">▲</span> vexdb</a>
     <div class="nav-links">
+      <a href="#demo">Live demo</a>
       <a href="#how">How it works</a>
       <a href="#bench">Benchmarks</a>
       <a href="#roadmap">Roadmap</a>
@@ -497,8 +656,8 @@
       curves at parity</em>, and the remaining QPS gap measured and explained.
     </p>
     <div class="cta-row">
-      <a class="btn btn-solid" href="https://github.com/aarinb1/vexdb">Read the source</a>
-      <a class="btn btn-ghost" href="#how">How it works ↓</a>
+      <a class="btn btn-solid" href="#demo">Try it in your browser ↓</a>
+      <a class="btn btn-ghost" href="https://github.com/aarinb1/vexdb">Read the source</a>
     </div>
     <div class="hero-stats">
       <div class="stat"><div class="num">0.97</div><div class="lbl">recall@10 · 100k vectors</div></div>
@@ -507,6 +666,57 @@
     </div>
   </div>
 </header>
+
+<section id="demo">
+  <div class="wrap">
+    <div class="sec-kicker reveal">00 · Live demo</div>
+    <h2 class="reveal">This database is running <em style="font-style:italic">in your tab.</em></h2>
+    <p class="sec-sub reveal">
+      No server, no video — vex-core compiled to WebAssembly (275&nbsp;KB), searching
+      5,000 movie-plot embeddings with the same HNSW graph, filters, and snapshot
+      format as the native build. Boot it and describe a movie.
+    </p>
+
+    <div class="demo-shell reveal">
+      <div class="boot-zone" id="boot-zone">
+        <p>One click downloads the 9.5&nbsp;MB <code style="font-family:var(--mono); font-size:0.92em; color:var(--ink)">movies.vex</code>
+        snapshot (5,000 plots × 384-dim MiniLM embeddings) and loads it into the WASM engine.
+        Exploring by example is instant; typed search additionally fetches the ~25&nbsp;MB
+        embedding model so your query is embedded locally too.</p>
+        <button class="boot-btn" id="boot">Boot the database</button>
+        <div class="progress" id="boot-prog"><i></i></div>
+        <div class="demo-status" id="boot-status"></div>
+      </div>
+
+      <div class="demo-main" id="demo-main">
+        <div class="stats-strip" id="stats-strip"></div>
+        <div class="demo-controls">
+          <input type="text" id="q" placeholder="describe a movie — e.g. a lonely robot discovers what it means to be human" autocomplete="off">
+          <button class="demo-btn" id="go">Search</button>
+          <button class="demo-btn ghost" id="lucky">Surprise me</button>
+        </div>
+        <div class="demo-knobs">
+          <label>genre
+            <select id="genre"><option value="">any</option></select>
+          </label>
+          <label>ef <input type="range" id="ef" min="10" max="400" step="10" value="80">
+            <span id="ef-val">80</span>
+          </label>
+          <span id="model-status"></span>
+        </div>
+        <div class="chip-row" id="chips">
+          <button class="chip">a lonely robot discovers what it means to be human</button>
+          <button class="chip">heist crew plans one last job</button>
+          <button class="chip">kids discover a monster in their small town</button>
+          <button class="chip">two strangers fall in love on a road trip</button>
+        </div>
+        <div class="lat-strip" id="lat"></div>
+        <div class="hits" id="hits"></div>
+        <div class="demo-err" id="demo-err"></div>
+      </div>
+    </div>
+  </div>
+</section>
 
 <section id="how">
   <div class="wrap">
@@ -696,6 +906,16 @@ build:   flat   23.0ms   hnsw(M=16, efc=200)   48.4s
           <p>The capstone: identical data, identical parameters, single thread. Recall at
           parity; the 2× QPS gap isolated to distance-kernel throughput and written up
           honestly in BENCHMARKS.md.</p>
+        </div>
+        <div class="st done">● shipped</div>
+      </div>
+      <div class="phase">
+        <div class="no">/10</div>
+        <div class="what">
+          <h3>The browser build</h3>
+          <p>vex-wasm: the engine compiled to 275 KB of WebAssembly. The live demo at the
+          top of this page — 5,000 movie embeddings, filters, snapshot parsing — is the
+          same Rust running in your tab.</p>
         </div>
         <div class="st done">● shipped</div>
       </div>
@@ -898,6 +1118,181 @@ build:   flat   23.0ms   hnsw(M=16, efc=200)   48.4s
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
+})();
+
+/* ---- live demo: vex-core in WebAssembly ---- */
+(() => {
+  const $ = id => document.getElementById(id);
+  const state = { index: null, meta: null, embedder: null, modelLoading: null };
+
+  const setErr = msg => { $("demo-err").textContent = msg || ""; };
+  const fmtMs = ms => ms < 10 ? ms.toFixed(2) + " ms" : ms.toFixed(0) + " ms";
+
+  async function fetchWithProgress(url, onPct) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`fetch ${url}: ${res.status}`);
+    const total = +res.headers.get("content-length") || 0;
+    if (!res.body || !total) return new Uint8Array(await res.arrayBuffer());
+    const reader = res.body.getReader();
+    const buf = new Uint8Array(total);
+    let got = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf.set(value, got);
+      got += value.length;
+      onPct(got / total * 100);
+    }
+    return buf;
+  }
+
+  $("boot").addEventListener("click", async () => {
+    const btn = $("boot"), prog = $("boot-prog"), status = $("boot-status");
+    btn.disabled = true;
+    prog.classList.add("on");
+    setErr("");
+    try {
+      status.textContent = "loading wasm engine…";
+      const wasm = await import("./demo/pkg/vex_wasm.js");
+      await wasm.default();
+
+      status.textContent = "downloading movies.vex…";
+      const bytes = await fetchWithProgress("./demo/movies.vex",
+        pct => { prog.firstElementChild.style.width = pct + "%"; status.textContent = `downloading movies.vex… ${pct.toFixed(0)}%`; });
+
+      const meta = await (await fetch("./demo/meta.json")).json();
+
+      status.textContent = "building index from snapshot…";
+      const t0 = performance.now();
+      const index = wasm.VexIndex.fromSnapshot(bytes);
+      const loadMs = performance.now() - t0;
+
+      state.index = index;
+      state.meta = meta;
+      for (const g of meta.genres.slice(0, 14)) {
+        const o = document.createElement("option");
+        o.textContent = g;
+        $("genre").appendChild(o);
+      }
+      $("stats-strip").innerHTML =
+        `<span><b>${index.len().toLocaleString()}</b> movie plots</span>` +
+        `<span>dim <b>${index.dim()}</b> · cosine</span>` +
+        `<span>HNSW · M=16</span>` +
+        `<span>snapshot parsed in <b>${fmtMs(loadMs)}</b></span>` +
+        `<span>engine: <b>275 KB</b> wasm</span>` +
+        `<span>years ${meta.yearRange[0]}–${meta.yearRange[1]}</span>`;
+      $("boot-zone").style.display = "none";
+      $("demo-main").classList.add("on");
+    } catch (e) {
+      btn.disabled = false;
+      prog.classList.remove("on");
+      status.textContent = "";
+      setErr(`boot failed: ${e.message}\n(If you opened this file directly, serve the folder instead — e.g. "python3 -m http.server --directory docs" — module/wasm loading needs http.)`);
+    }
+  });
+
+  function filterJson() {
+    const g = $("genre").value;
+    return g ? JSON.stringify({ contains: { key: "genres", value: g } }) : null;
+  }
+
+  function render(hits, latHtml) {
+    $("lat").innerHTML = latHtml;
+    const wrap = $("hits");
+    wrap.innerHTML = "";
+    if (!hits.length) {
+      wrap.innerHTML = `<div style="color:var(--ink-faint); font-family:var(--mono); font-size:12.5px;">no results for this filter</div>`;
+      return;
+    }
+    for (const h of hits) {
+      const p = h.payload || {};
+      const card = document.createElement("div");
+      card.className = "hit";
+      const sim = (1 - h.distance) * 100;
+      card.innerHTML =
+        `<h4>${esc(p.title)} <span class="yr">(${p.year})</span></h4>` +
+        `<div class="meta-line"><b>${sim.toFixed(1)}%</b> match · ${esc((p.genres || []).slice(0, 3).join(" / "))}${p.rating ? ` · ★ ${p.rating}` : ""}</div>` +
+        `<p>${esc(p.overview || "")}</p>` +
+        `<button class="more" data-id="${h.id}">more like this →</button>`;
+      wrap.appendChild(card);
+    }
+    wrap.querySelectorAll(".more").forEach(b =>
+      b.addEventListener("click", () => searchById(+b.dataset.id)));
+  }
+  const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  function searchVector(vec, label) {
+    setErr("");
+    try {
+      const ef = +$("ef").value;
+      const t0 = performance.now();
+      const hits = state.index.search(vec, 9, ef, filterJson());
+      const ms = performance.now() - t0;
+      render(hits, `${label}HNSW search (ef=${ef}): <b>${fmtMs(ms)}</b> over ${state.index.len().toLocaleString()} vectors — in WebAssembly`);
+    } catch (e) { setErr(e.message); }
+  }
+
+  function searchById(id) {
+    const vec = state.index.vectorOf(BigInt(id));
+    if (!vec) return;
+    const p = state.index.payloadOf(BigInt(id));
+    $("q").value = "";
+    searchVector(vec, `neighbors of “${p?.title ?? id}” · `);
+    $("demo-main").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  $("lucky").addEventListener("click", () => {
+    if (!state.index) return;
+    searchById(Math.floor(Math.random() * state.index.len()));
+  });
+
+  async function ensureModel() {
+    if (state.embedder) return state.embedder;
+    if (!state.modelLoading) {
+      state.modelLoading = (async () => {
+        const ms = $("model-status");
+        ms.textContent = "loading embedding model (~25 MB, once)…";
+        const { pipeline } = await import("https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.1");
+        const embedder = await pipeline("feature-extraction", state.meta.model, {
+          dtype: "q8",
+          progress_callback: p => {
+            if (p.status === "progress" && p.file?.endsWith(".onnx"))
+              ms.textContent = `loading embedding model… ${(p.progress || 0).toFixed(0)}%`;
+          },
+        });
+        ms.innerHTML = `<span style="color:var(--accent-2)">model ready — queries embed locally</span>`;
+        state.embedder = embedder;
+        return embedder;
+      })();
+      state.modelLoading.catch(() => { state.modelLoading = null; });
+    }
+    return state.modelLoading;
+  }
+
+  async function typedSearch() {
+    const text = $("q").value.trim();
+    if (!text || !state.index) return;
+    setErr("");
+    $("go").disabled = true;
+    try {
+      const embedder = await ensureModel();
+      const t0 = performance.now();
+      const out = await embedder(text, { pooling: "mean", normalize: true });
+      const embedMs = performance.now() - t0;
+      searchVector(new Float32Array(out.data),
+        `embed (MiniLM, local): <b>${fmtMs(embedMs)}</b> · `);
+    } catch (e) {
+      setErr(`embedding failed: ${e.message}\n(The model downloads from huggingface.co — check your connection. "Surprise me" works offline.)`);
+    } finally {
+      $("go").disabled = false;
+    }
+  }
+
+  $("go").addEventListener("click", typedSearch);
+  $("q").addEventListener("keydown", e => { if (e.key === "Enter") typedSearch(); });
+  $("ef").addEventListener("input", () => { $("ef-val").textContent = $("ef").value; });
+  document.querySelectorAll("#chips .chip").forEach(c =>
+    c.addEventListener("click", () => { $("q").value = c.textContent; typedSearch(); }));
 })();
 
 /* ---- scroll reveal ---- */
