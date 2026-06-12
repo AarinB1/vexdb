@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>vexdb — console</title>
+<style>
+  :root {
+    --bg: #08070b; --raise: #0e0d13; --ink: #ece9e2; --dim: #9b97a8;
+    --faint: #5d5a6b; --line: rgba(236,233,226,.09);
+    --accent: #c8b8ff; --accent2: #7ef0d4; --bad: #ff8a8a;
+    --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font-family: var(--mono); font-size: 13.5px; line-height: 1.6;
+    min-height: 100vh; padding: 40px 24px;
+    background-image: radial-gradient(ellipse 60% 40% at 70% 0%, rgba(124,96,220,.12), transparent 65%);
+  }
+  ::selection { background: var(--accent); color: var(--bg); }
+  .wrap { max-width: 860px; margin: 0 auto; }
+  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 36px; }
+  .logo { font-size: 16px; }
+  .logo b { color: var(--accent2); font-weight: 400; }
+  .status { font-size: 12px; color: var(--faint); }
+  .status .ok { color: var(--accent2); }
+  h2 { font-size: 12px; font-weight: 400; color: var(--faint); text-transform: uppercase; letter-spacing: .12em; margin: 28px 0 12px; }
+  .card { background: var(--raise); border: 1px solid var(--line); border-radius: 12px; padding: 20px; }
+  label { display: block; font-size: 11px; color: var(--faint); text-transform: uppercase; letter-spacing: .1em; margin-bottom: 6px; }
+  input, select, textarea {
+    width: 100%; background: var(--bg); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 8px;
+    font-family: var(--mono); font-size: 13px; padding: 9px 12px;
+    outline: none; transition: border-color .15s;
+  }
+  input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+  textarea { resize: vertical; min-height: 60px; }
+  .row { display: grid; gap: 14px; margin-bottom: 14px; }
+  .row.c2 { grid-template-columns: 2fr 1fr; }
+  .row.c3 { grid-template-columns: 1fr 1fr 1fr; }
+  .row.c4 { grid-template-columns: 2fr 1fr 1fr 1fr; }
+  button {
+    font-family: var(--mono); font-size: 13px; cursor: pointer;
+    background: var(--ink); color: var(--bg); border: 0;
+    padding: 10px 22px; border-radius: 100px; transition: transform .15s, box-shadow .15s;
+  }
+  button:hover { transform: translateY(-1px); box-shadow: 0 6px 24px rgba(200,184,255,.3); }
+  button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  button.ghost:hover { border-color: var(--accent); box-shadow: none; }
+  button:disabled { opacity: .4; cursor: default; transform: none; box-shadow: none; }
+  table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+  th { text-align: left; font-weight: 400; font-size: 11px; color: var(--faint); text-transform: uppercase; letter-spacing: .1em; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  td { padding: 8px 10px; border-bottom: 1px solid var(--line); color: var(--dim); vertical-align: top; }
+  td:first-child { color: var(--accent2); }
+  td.pl { font-size: 12px; word-break: break-all; }
+  .err { color: var(--bad); font-size: 12.5px; margin-top: 10px; white-space: pre-wrap; }
+  .hint { color: var(--faint); font-size: 12px; margin-top: 10px; }
+  .pill { display: inline-block; border: 1px solid var(--line); border-radius: 100px; padding: 2px 10px; font-size: 11.5px; color: var(--dim); margin: 0 6px 6px 0; cursor: pointer; transition: border-color .15s, color .15s; }
+  .pill:hover, .pill.on { border-color: var(--accent2); color: var(--accent2); }
+  .meta { font-size: 12px; color: var(--faint); margin-top: 8px; }
+  footer { margin-top: 48px; font-size: 12px; color: var(--faint); display: flex; justify-content: space-between; }
+  footer a { color: var(--dim); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo"><b>▲</b> vexdb console</div>
+    <div class="status" id="health">checking…</div>
+  </header>
+
+  <h2>Collections</h2>
+  <div class="card">
+    <div id="collections" class="hint">loading…</div>
+    <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
+      <button class="ghost" id="seed">Create demo collection (1k random vectors, dim 32)</button>
+      <button class="ghost" id="refresh">Refresh</button>
+    </div>
+    <div class="err" id="coll-err"></div>
+  </div>
+
+  <h2>Search</h2>
+  <div class="card">
+    <div class="row c4">
+      <div>
+        <label for="coll">collection</label>
+        <select id="coll"></select>
+      </div>
+      <div>
+        <label for="k">k</label>
+        <input id="k" type="number" value="10" min="1" max="1024">
+      </div>
+      <div>
+        <label for="ef">ef</label>
+        <input id="ef" type="number" value="64" min="1">
+      </div>
+      <div>
+        <label>&nbsp;</label>
+        <button id="random" class="ghost" style="width:100%">Random query</button>
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label for="query">query vector (comma-separated floats)</label>
+        <textarea id="query" placeholder="0.12, -0.5, 0.33, …"></textarea>
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label for="filter">filter (optional JSON — e.g. {"eq":{"key":"bucket","value":3}})</label>
+        <textarea id="filter" placeholder='{"and":[{"eq":{"key":"bucket","value":3}}]}'></textarea>
+      </div>
+    </div>
+    <button id="go">Search</button>
+    <span class="meta" id="took"></span>
+    <div class="err" id="err"></div>
+    <div id="results"></div>
+  </div>
+
+  <footer>
+    <div>vexdb — a vector database from first principles</div>
+    <a href="https://github.com/aarinb1/vexdb">source ↗</a>
+  </footer>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const api = async (method, path, body) => {
+  const res = await fetch(path, {
+    method,
+    headers: body ? { "Content-Type": "application/json" } : {},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text();
+  let json = null;
+  try { json = text ? JSON.parse(text) : null; } catch { /* non-JSON */ }
+  if (!res.ok) throw new Error(json?.error || `${res.status} ${res.statusText}`);
+  return json;
+};
+
+let dims = {};
+
+async function refresh() {
+  $("coll-err").textContent = "";
+  try {
+    const { collections } = await api("GET", "/collections");
+    dims = Object.fromEntries(collections.map(c => [c.name, c.dim]));
+    const sel = $("coll");
+    const prev = sel.value;
+    sel.innerHTML = collections.map(c => `<option>${c.name}</option>`).join("");
+    if (collections.some(c => c.name === prev)) sel.value = prev;
+    $("collections").innerHTML = collections.length
+      ? collections.map(c =>
+          `<span class="pill" data-name="${c.name}">${c.name} · ${c.index} · dim ${c.dim} · ${c.count} vectors · ${c.metric}</span>`
+        ).join("")
+      : "no collections yet — create the demo one below, or POST /collections/{name}";
+    document.querySelectorAll(".pill[data-name]").forEach(p =>
+      p.addEventListener("click", () => { $("coll").value = p.dataset.name; }));
+  } catch (e) {
+    $("coll-err").textContent = e.message;
+  }
+}
+
+async function checkHealth() {
+  try {
+    await api("GET", "/health");
+    $("health").innerHTML = '<span class="ok">●</span> healthy';
+  } catch {
+    $("health").textContent = "● unreachable";
+  }
+}
+
+$("seed").addEventListener("click", async () => {
+  $("coll-err").textContent = "";
+  $("seed").disabled = true;
+  try {
+    await api("POST", "/collections/demo", { dim: 32, metric: "l2", index: "hnsw" });
+    const points = [];
+    for (let i = 0; i < 1000; i++) {
+      points.push({
+        id: i,
+        vector: Array.from({ length: 32 }, () => +(Math.random() * 2 - 1).toFixed(4)),
+        payload: { bucket: i % 10, n: i },
+      });
+    }
+    await api("POST", "/collections/demo/points", { points });
+    await refresh();
+    $("coll").value = "demo";
+  } catch (e) {
+    $("coll-err").textContent = e.message;
+  } finally {
+    $("seed").disabled = false;
+  }
+});
+
+$("refresh").addEventListener("click", refresh);
+
+$("random").addEventListener("click", () => {
+  const dim = dims[$("coll").value];
+  if (!dim) { $("err").textContent = "pick a collection first"; return; }
+  $("err").textContent = "";
+  $("query").value = Array.from({ length: dim }, () => +(Math.random() * 2 - 1).toFixed(4)).join(", ");
+});
+
+$("go").addEventListener("click", async () => {
+  $("err").textContent = "";
+  $("results").innerHTML = "";
+  $("took").textContent = "";
+  let filter = null;
+  const ftext = $("filter").value.trim();
+  if (ftext) {
+    try { filter = JSON.parse(ftext); }
+    catch { $("err").textContent = "filter is not valid JSON"; return; }
+  }
+  const query = $("query").value.split(",").map(s => parseFloat(s.trim())).filter(x => !Number.isNaN(x));
+  if (!query.length) { $("err").textContent = "enter a query vector (or click Random query)"; return; }
+  const body = { query, k: +$("k").value || 10, ef: +$("ef").value || undefined };
+  if (filter) body.filter = filter;
+  const t0 = performance.now();
+  try {
+    const { results } = await api("POST", `/collections/${$("coll").value}/search`, body);
+    const ms = (performance.now() - t0).toFixed(1);
+    $("took").textContent = `${results.length} hits · ${ms} ms round-trip`;
+    $("results").innerHTML = results.length ? `
+      <table>
+        <thead><tr><th>id</th><th>distance</th><th>payload</th></tr></thead>
+        <tbody>${results.map(r => `
+          <tr><td>${r.id}</td><td>${r.distance.toFixed(6)}</td>
+          <td class="pl">${r.payload ? JSON.stringify(r.payload) : "—"}</td></tr>`).join("")}
+        </tbody>
+      </table>` : '<div class="hint">no results</div>';
+  } catch (e) {
+    $("err").textContent = e.message;
+  }
+});
+
+checkHealth();
+refresh();
+</script>
+</body>
+</html>

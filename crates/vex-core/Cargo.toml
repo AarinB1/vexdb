@@ -5,19 +5,22 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Core types and flat index for the vex vector database."
+description = "Core types, flat and HNSW indexes for the vex vector database."
 
 [dependencies]
 thiserror.workspace = true
-serde = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+rayon = { workspace = true, optional = true }
 
 [features]
-default = ["serde"]
-serde = ["dep:serde"]
+default = ["rayon"]
+rayon = ["dep:rayon"]
 
 [dev-dependencies]
 proptest.workspace = true
 criterion.workspace = true
+tempfile.workspace = true
 
 [[bench]]
 name = "search"

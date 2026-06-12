@@ -1,13 +1,11 @@
 use crate::error::{Result, VexError};
 
-#[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
 /// Stable 64-bit identifier for a vector. `u64` (not `usize`) so the on-disk
 /// format and IDs are portable across 32/64-bit targets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[cfg_attr(feature = "serde", serde(transparent))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct VectorId(pub u64);
 
 impl From<u64> for VectorId {

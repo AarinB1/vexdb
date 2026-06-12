@@ -23,6 +23,7 @@ use std::collections::{BinaryHeap, HashMap};
 use crate::distance::DistanceMetric;
 use crate::error::{Result, VexError};
 use crate::index::{Index, SearchResult};
+use crate::payload::{Filter, Payload};
 use crate::vector::{Vector, VectorId};
 
 /// Tunable HNSW parameters.
@@ -55,25 +56,26 @@ impl Default for HnswConfig {
     }
 }
 
-struct Node {
-    id: VectorId,
-    vector: Vector,
+pub(crate) struct Node {
+    pub(crate) id: VectorId,
+    pub(crate) vector: Vector,
     /// Adjacency lists, one per layer this node participates in
     /// (`neighbors.len() - 1` is the node's top layer).
-    neighbors: Vec<Vec<u32>>,
-    deleted: bool,
+    pub(crate) neighbors: Vec<Vec<u32>>,
+    pub(crate) deleted: bool,
+    pub(crate) payload: Option<Payload>,
 }
 
 pub struct HnswIndex {
-    config: HnswConfig,
-    metric: DistanceMetric,
-    dim: usize,
-    nodes: Vec<Node>,
-    id_to_pos: HashMap<VectorId, u32>,
-    entry_point: Option<u32>,
-    max_layer: usize,
-    live_count: usize,
-    rng_state: u64,
+    pub(crate) config: HnswConfig,
+    pub(crate) metric: DistanceMetric,
+    pub(crate) dim: usize,
+    pub(crate) nodes: Vec<Node>,
+    pub(crate) id_to_pos: HashMap<VectorId, u32>,
+    pub(crate) entry_point: Option<u32>,
+    pub(crate) max_layer: usize,
+    pub(crate) live_count: usize,
+    pub(crate) rng_state: u64,
 }
 
 /// (distance, node) pair ordered by distance via `total_cmp` (NaN-safe),
@@ -140,6 +142,24 @@ impl HnswIndex {
     /// Search with an explicit beam width, overriding `config.ef_search`.
     /// `ef` is clamped to at least `k`.
     pub fn search_with_ef(&self, query: &[f32], k: usize, ef: usize) -> Result<Vec<SearchResult>> {
+        self.search_filtered_with_ef(query, k, ef, None)
+    }
+
+    /// Filtered search with an explicit beam width.
+    ///
+    /// Filtering happens *during* traversal: non-matching nodes (and
+    /// tombstones) still route the beam through the graph, but only matching
+    /// live nodes occupy the `ef` result slots. A selective filter therefore
+    /// widens the explored region instead of returning fewer than `k`
+    /// results — the worst case (nothing matches) degrades to visiting the
+    /// query's connected component, like a flat scan.
+    pub fn search_filtered_with_ef(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: usize,
+        filter: Option<&Filter>,
+    ) -> Result<Vec<SearchResult>> {
         if k == 0 {
             return Err(VexError::InvalidK);
         }
@@ -163,13 +183,15 @@ impl HnswIndex {
             (ep, ep_dist) = self.greedy_closest(query, ep, ep_dist, layer);
         }
 
-        // ...then the real beam search on the dense bottom layer. Tombstoned
-        // nodes participate in routing but are filtered from results.
+        // ...then the real beam search on the dense bottom layer.
         let ef = ef.max(k);
-        let found = self.search_layer(query, ep, ep_dist, ef, 0);
+        let admit = |n: u32| {
+            let node = &self.nodes[n as usize];
+            !node.deleted && filter.is_none_or(|f| f.matches(node.payload.as_ref()))
+        };
+        let found = self.search_layer(query, ep, ep_dist, ef, 0, admit);
         Ok(found
             .into_iter()
-            .filter(|c| !self.nodes[c.node as usize].deleted)
             .take(k)
             .map(|c| SearchResult {
                 id: self.nodes[c.node as usize].id,
@@ -228,15 +250,18 @@ impl HnswIndex {
 
     /// Beam search on a single layer (Algorithm 2 in the paper). Maintains a
     /// min-heap of frontier candidates and a bounded max-heap of the `ef`
-    /// best results; stops when the closest frontier candidate is worse than
-    /// the worst kept result. Returns results sorted ascending by distance.
-    fn search_layer(
+    /// best *admitted* results; stops when the closest frontier candidate is
+    /// worse than the worst kept result. Non-admitted nodes (tombstones,
+    /// filter misses) are traversed — they route the beam — but never
+    /// occupy result slots. Returns results sorted ascending by distance.
+    fn search_layer<F: Fn(u32) -> bool>(
         &self,
         query: &[f32],
         ep: u32,
         ep_dist: f32,
         ef: usize,
         layer: usize,
+        admit: F,
     ) -> Vec<Candidate> {
         let mut visited = vec![false; self.nodes.len()];
         visited[ep as usize] = true;
@@ -248,10 +273,15 @@ impl HnswIndex {
         let mut frontier = BinaryHeap::new();
         frontier.push(Reverse(start));
         let mut best: BinaryHeap<Candidate> = BinaryHeap::new();
-        best.push(start);
+        if admit(ep) {
+            best.push(start);
+        }
 
         while let Some(Reverse(current)) = frontier.pop() {
-            let worst = best.peek().expect("best is never empty").distance;
+            // Until `best` holds ef admitted results, worst is +inf and the
+            // beam keeps expanding — this is what makes selective filters
+            // widen the search instead of starving it.
+            let worst = best.peek().map_or(f32::INFINITY, |w| w.distance);
             if best.len() >= ef && current.distance > worst {
                 break;
             }
@@ -260,16 +290,18 @@ impl HnswIndex {
                     continue;
                 }
                 let d = self.dist_to_node(query, nb);
-                let worst = best.peek().expect("best is never empty").distance;
+                let worst = best.peek().map_or(f32::INFINITY, |w| w.distance);
                 if best.len() < ef || d < worst {
                     let c = Candidate {
                         distance: d,
                         node: nb,
                     };
                     frontier.push(Reverse(c));
-                    best.push(c);
-                    if best.len() > ef {
-                        best.pop();
+                    if admit(nb) {
+                        best.push(c);
+                        if best.len() > ef {
+                            best.pop();
+                        }
                     }
                 }
             }
@@ -329,7 +361,12 @@ impl HnswIndex {
 }
 
 impl Index for HnswIndex {
-    fn add(&mut self, id: VectorId, vector: Vector) -> Result<()> {
+    fn add_with_payload(
+        &mut self,
+        id: VectorId,
+        vector: Vector,
+        payload: Option<Payload>,
+    ) -> Result<()> {
         if vector.dim() != self.dim {
             return Err(VexError::DimensionMismatch {
                 expected: self.dim,
@@ -352,6 +389,7 @@ impl Index for HnswIndex {
             vector,
             neighbors: vec![Vec::new(); level + 1],
             deleted: false,
+            payload,
         });
         self.id_to_pos.insert(id, new_pos);
         self.live_count += 1;
@@ -378,7 +416,16 @@ impl Index for HnswIndex {
         // Phase 2: on each layer the node lives on, beam-search for
         // candidates, pick M by the heuristic, and link bidirectionally.
         for layer in (0..=level.min(self.max_layer)).rev() {
-            let cands = self.search_layer(&query, ep, ep_dist, self.config.ef_construction, layer);
+            // Insertion admits every node — tombstones stay good waypoints,
+            // and linking to them keeps the graph connected.
+            let cands = self.search_layer(
+                &query,
+                ep,
+                ep_dist,
+                self.config.ef_construction,
+                layer,
+                |_| true,
+            );
             let chosen = self.select_neighbors(&cands, self.config.m);
             let m_max = if layer == 0 {
                 self.config.m * 2
@@ -420,8 +467,24 @@ impl Index for HnswIndex {
         }
     }
 
-    fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
-        self.search_with_ef(query, k, self.config.ef_search)
+    fn search_filtered(
+        &self,
+        query: &[f32],
+        k: usize,
+        filter: Option<&Filter>,
+    ) -> Result<Vec<SearchResult>> {
+        self.search_filtered_with_ef(query, k, self.config.ef_search, filter)
+    }
+
+    fn payload(&self, id: VectorId) -> Option<&Payload> {
+        self.id_to_pos.get(&id).and_then(|&pos| {
+            let node = &self.nodes[pos as usize];
+            if node.deleted {
+                None
+            } else {
+                node.payload.as_ref()
+            }
+        })
     }
 
     fn len(&self) -> usize {
@@ -581,6 +644,45 @@ mod tests {
         }
         let recall = hits as f64 / total as f64;
         assert!(recall >= 0.9, "recall@{k} = {recall:.3}, expected >= 0.9");
+    }
+
+    #[test]
+    fn filtered_search_survives_selective_filters() {
+        // 1000 vectors, filter matches ~10%. Traversal-time filtering must
+        // still produce k results with correct payload, not starve.
+        use serde_json::json;
+        let vectors = random_vectors(1000, 8, 5);
+        let mut idx = HnswIndex::with_defaults(8, DistanceMetric::L2);
+        for (i, vec) in vectors.iter().enumerate() {
+            idx.add_with_payload(
+                VectorId(i as u64),
+                Vector::from_vec(vec.clone()),
+                Some(json!({"bucket": i % 10, "n": i})),
+            )
+            .unwrap();
+        }
+        let filter = crate::payload::Filter::Eq {
+            key: "bucket".into(),
+            value: json!(3),
+        };
+        for q in random_vectors(10, 8, 77) {
+            let res = idx
+                .search_filtered_with_ef(&q, 10, 64, Some(&filter))
+                .unwrap();
+            assert_eq!(res.len(), 10, "filtered search starved");
+            for r in &res {
+                assert_eq!(r.id.0 % 10, 3, "filter violated for id {}", r.id);
+            }
+        }
+        // And a filter that matches nothing returns empty, not an error.
+        let none = crate::payload::Filter::Eq {
+            key: "bucket".into(),
+            value: json!(99),
+        };
+        assert!(idx
+            .search_filtered_with_ef(&random_vectors(1, 8, 1)[0], 5, 32, Some(&none))
+            .unwrap()
+            .is_empty());
     }
 
     proptest! {

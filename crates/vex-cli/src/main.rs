@@ -7,7 +7,9 @@ use std::time::Instant;
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use serde::Deserialize;
-use vex_core::{DistanceMetric, FlatIndex, HnswConfig, HnswIndex, Index, Vector, VectorId};
+use vex_core::{
+    AnyIndex, DistanceMetric, FlatIndex, HnswConfig, HnswIndex, Index, Vector, VectorId,
+};
 
 #[derive(Parser, Debug)]
 #[command(name = "vex", version, about = "vex vector database CLI", long_about = None)]
@@ -27,17 +29,43 @@ enum Command {
         #[arg(short = 'm', long, default_value = "l2")]
         metric: String,
     },
-    /// Load JSONL into an index and run a search against `--query`.
-    Query {
+    /// Build an index from JSONL and save it as a .vex snapshot.
+    Build {
         #[arg(short, long)]
         input: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(short, long)]
+        dim: usize,
+        #[arg(short = 'm', long, default_value = "l2")]
+        metric: String,
+        /// Index type to build: "flat" (exact) or "hnsw" (approximate).
+        #[arg(long, default_value = "hnsw")]
+        index: String,
+        #[arg(long, default_value_t = 16)]
+        hnsw_m: usize,
+        #[arg(long, default_value_t = 200)]
+        ef_construction: usize,
+    },
+    /// Search an index built from JSONL (--input) or a .vex snapshot
+    /// (--snapshot) against `--query`.
+    Query {
+        #[arg(short, long, conflicts_with = "snapshot")]
+        input: Option<PathBuf>,
+        /// Path to a .vex snapshot produced by `vex build`.
+        #[arg(short, long)]
+        snapshot: Option<PathBuf>,
         #[arg(short, long)]
         query: String,
         #[arg(short, long, default_value_t = 5)]
         k: usize,
+        /// Beam width for HNSW (ignored by flat indexes).
+        #[arg(long)]
+        ef: Option<usize>,
         #[arg(short = 'm', long, default_value = "l2")]
         metric: String,
-        /// Index to search with: "flat" (exact) or "hnsw" (approximate).
+        /// Index to build from --input: "flat" or "hnsw". Ignored with
+        /// --snapshot (the snapshot records its own type).
         #[arg(long, default_value = "flat")]
         index: String,
     },
@@ -75,6 +103,8 @@ enum Command {
 struct Record {
     id: u64,
     vector: Vec<f32>,
+    #[serde(default)]
+    payload: Option<serde_json::Value>,
 }
 
 fn main() -> Result<()> {
@@ -90,24 +120,54 @@ fn main() -> Result<()> {
                 metric
             );
         }
+        Command::Build {
+            input,
+            output,
+            dim,
+            metric,
+            index,
+            hnsw_m,
+            ef_construction,
+        } => {
+            let metric: DistanceMetric = metric.parse().map_err(|e: String| anyhow!(e))?;
+            let mut idx = new_index(&index, dim, metric, hnsw_m, ef_construction)?;
+            let start = Instant::now();
+            load_into(&input, &mut idx)?;
+            let built = start.elapsed();
+            idx.save(&output)
+                .with_context(|| format!("saving snapshot to {}", output.display()))?;
+            println!(
+                "built {} index: {} vectors, dim {}, metric {:?} in {:.2?}; saved to {}",
+                idx.type_name(),
+                idx.len(),
+                idx.dim(),
+                metric,
+                built,
+                output.display()
+            );
+        }
         Command::Query {
             input,
+            snapshot,
             query,
             k,
+            ef,
             metric,
             index,
         } => {
-            let metric: DistanceMetric = metric.parse().map_err(|e: String| anyhow!(e))?;
             let q = parse_query(&query)?;
-            let results = match index.as_str() {
-                "flat" => build_index(&input, q.len(), metric)?.search(&q, k)?,
-                "hnsw" => {
-                    let mut idx = HnswIndex::with_defaults(q.len(), metric);
-                    load_into(&input, &mut idx)?;
-                    idx.search(&q, k)?
+            let idx: AnyIndex = match (input, snapshot) {
+                (_, Some(path)) => AnyIndex::load(&path)
+                    .with_context(|| format!("loading snapshot {}", path.display()))?,
+                (Some(path), None) => {
+                    let metric: DistanceMetric = metric.parse().map_err(|e: String| anyhow!(e))?;
+                    let mut idx = new_index(&index, q.len(), metric, 16, 200)?;
+                    load_into(&path, &mut idx)?;
+                    idx
                 }
-                other => return Err(anyhow!("unknown index type: {other} (expected flat|hnsw)")),
+                (None, None) => return Err(anyhow!("provide --input or --snapshot")),
             };
+            let results = idx.search_opts(&q, k, ef, None)?;
             println!("top {} results:", results.len());
             for r in results {
                 println!("  id={} distance={:.6}", r.id, r.distance);
@@ -274,6 +334,28 @@ fn build_index(path: &Path, dim: usize, metric: DistanceMetric) -> Result<FlatIn
     Ok(index)
 }
 
+fn new_index(
+    kind: &str,
+    dim: usize,
+    metric: DistanceMetric,
+    m: usize,
+    ef_construction: usize,
+) -> Result<AnyIndex> {
+    match kind {
+        "flat" => Ok(AnyIndex::Flat(FlatIndex::new(dim, metric))),
+        "hnsw" => Ok(AnyIndex::Hnsw(HnswIndex::new(
+            dim,
+            metric,
+            HnswConfig {
+                m,
+                ef_construction,
+                ..HnswConfig::default()
+            },
+        ))),
+        other => Err(anyhow!("unknown index type: {other} (expected flat|hnsw)")),
+    }
+}
+
 fn load_into<I: Index>(path: &Path, index: &mut I) -> Result<()> {
     let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let reader = BufReader::new(file);
@@ -288,7 +370,7 @@ fn load_into<I: Index>(path: &Path, index: &mut I) -> Result<()> {
         let vector = Vector::new(rec.vector, dim)
             .with_context(|| format!("validating vector at line {}", lineno + 1))?;
         index
-            .add(VectorId(rec.id), vector)
+            .add_with_payload(VectorId(rec.id), vector, rec.payload)
             .with_context(|| format!("adding vector at line {}", lineno + 1))?;
     }
     Ok(())

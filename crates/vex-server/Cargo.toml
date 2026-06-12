@@ -1,0 +1,30 @@
+[package]
+name = "vex-server"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "HTTP server for the vex vector database."
+
+[[bin]]
+name = "vex-server"
+path = "src/main.rs"
+
+[dependencies]
+vex-core.workspace = true
+axum.workspace = true
+tokio.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tower = { workspace = true, features = ["util"] }
+http-body-util.workspace = true
+tempfile.workspace = true

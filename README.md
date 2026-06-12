@@ -1,121 +1,129 @@
 # vexdb
 
-A vector database written in Rust, from scratch, as a learning project. The
-end goal is a hand-rolled HNSW index benchmarked against faiss; this repository
-is being built out in phases.
+A vector database written in Rust, from scratch — no faiss bindings, no
+black boxes. A hand-rolled HNSW index, binary snapshot persistence, payload
+filtering during graph traversal, SIMD distance kernels, and a Qdrant-style
+HTTP API, built in phases and benchmarked honestly against faiss at the end
+([BENCHMARKS.md](BENCHMARKS.md) — TL;DR: recall curves at parity with
+`IndexHNSWFlat`, QPS within ~2.5×, and the gap is entirely in the distance
+kernels, not the graph).
 
-## Phase 2 — HNSW (this checkpoint)
+## Workspace layout
 
-What's new:
+| crate        | what it is |
+|--------------|------------|
+| `vex-core`   | The engine: `FlatIndex` (exact), `HnswIndex` (approximate), distance metrics with AVX2 kernels, payload filters, `.vex` snapshot format. Synchronous, embeddable; `default-features = false` drops rayon for a lean build. |
+| `vex-cli`    | `vex` binary: `ingest`, `build` (JSONL → `.vex`), `query` (JSONL or snapshot), `bench` (recall/QPS harness). |
+| `vex-server` | `vex-server` binary: HTTP API + demo console over a directory of snapshots. All async deps (tokio/axum/tower) are isolated here. |
 
-- **`HnswIndex`**: Hierarchical Navigable Small World approximate
-  nearest-neighbor index, implemented from the Malkov & Yashunin paper —
-  layered graph with exponentially-decaying level sampling, greedy descent
-  through the upper layers, ef-bounded beam search at layer 0, and the
-  Algorithm 4 neighbor-selection heuristic (with `keepPrunedConnections`).
-  Tunables exposed via `HnswConfig`: `m`, `ef_construction`, `ef_search`,
-  plus a `seed` for deterministic construction. Storage is arena-style flat
-  arrays (`u32` neighbor indices), which sets up the Phase 3 on-disk format.
-- **Deletion via tombstones**: `remove` marks nodes deleted; they keep
-  routing queries but never appear in results. True graph repair is
-  deliberately out of scope (hnswlib and faiss avoid it too). `len()`
-  reports live vectors only.
-- **A unified `Index` contract** (see the trait docs): searching an empty
-  index returns zero results (no longer an error), `k > len()` clamps,
-  `remove` of a missing id is `Ok(false)`. The dead `IdNotFound` and
-  `EmptyIndex` error variants are gone.
-- **Recall tests**: property tests for structural invariants, plus a
-  recall@10 test against `FlatIndex` ground truth (the strongest kind of
-  test for a probabilistic structure).
-- **Benchmarks**: criterion baselines (`cargo bench -p vex-core`) and a
-  `vex bench` harness subcommand that sweeps `ef_search` and reports
-  recall@k, QPS, and build time against the flat baseline.
-
-What is **not** built yet (deliberately deferred):
-
-- On-disk persistence: Phase 3.
-- Filtering / metadata: Phase 4.
-- SIMD / vectorized distance: Phase 5.
-- Concurrency: Phase 6.
-- The faiss comparison on SIFT1M: Phase 7.
-
-## Phase 1 — Foundation
-
-- A `Vector` / `VectorId` core type pair with dimension validation.
-- `DistanceMetric` enum (`Cosine`, `L2`, `Dot`), naive scalar implementations.
-  All metrics return *distance* (smaller = more similar) so search code is
-  uniform; `Cosine` returns `1 - cos_sim`, `Dot` returns `-dot(a, b)`.
-- An `Index` trait and `FlatIndex`: brute-force linear scan with a bounded
-  max-heap for top-k selection (O(n log k)).
-- `thiserror`-based `VexError`.
-- A `vex` CLI with `ingest` and `query` subcommands over JSONL input.
-
-## Build
+## Quick start: the server
 
 ```sh
-cargo build --workspace
+cargo run --release -p vex-server -- --addr 127.0.0.1:8080 --data-dir ./data
 ```
 
-Requires stable Rust (1.75+).
-
-## Run the CLI
-
-The CLI consumes JSONL where each line is `{"id": <u64>, "vector": [<f32>, ...]}`.
+Open `http://127.0.0.1:8080/` for the built-in console (create a demo
+collection, run filtered searches from the browser). Or drive it directly:
 
 ```sh
-# Ingest and report counts:
-cargo run -p vex-cli -- ingest --input data.jsonl --dim 128
+# Create a collection
+curl -X POST localhost:8080/collections/products \
+  -H 'content-type: application/json' \
+  -d '{"dim": 8, "metric": "cosine", "index": "hnsw", "m": 16, "ef_construction": 200}'
 
-# Query (flat = exact, hnsw = approximate):
-cargo run -p vex-cli -- query \
-    --input data.jsonl \
-    --query 0.1,0.2,0.3 \
-    --k 10 \
-    --metric cosine \
-    --index hnsw
+# Upsert points (id exists → replaced)
+curl -X POST localhost:8080/collections/products/points \
+  -H 'content-type: application/json' \
+  -d '{"points": [{"id": 1, "vector": [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8],
+                   "payload": {"category": "shoes", "price": 49.0}}]}'
+
+# Filtered search
+curl -X POST localhost:8080/collections/products/search \
+  -H 'content-type: application/json' \
+  -d '{"query": [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8], "k": 10, "ef": 64,
+       "filter": {"and": [{"eq": {"key": "category", "value": "shoes"}},
+                          {"range": {"key": "price", "lte": 99.0}}]}}'
 ```
 
-`--metric` accepts `cosine`, `l2`, or `dot`; `--index` accepts `flat` or `hnsw`.
+### API
 
-## Benchmark harness
+```
+GET    /health                              liveness
+GET    /                                    demo console
+GET    /collections                         list collections
+POST   /collections/{name}                  create (dim, metric, index, m, ef_construction, ef_search)
+GET    /collections/{name}                  stats: count, dim, metric, index type
+DELETE /collections/{name}                  drop (removes the snapshot)
+POST   /collections/{name}/points           upsert batch: {"points": [{id, vector, payload?}]}
+DELETE /collections/{name}/points/{id}      delete one vector
+POST   /collections/{name}/search           {"query", "k", "ef"?, "filter"?, "with_payload"?}
+POST   /collections/{name}/snapshot         force a flush to disk
+```
+
+Errors map to honest statuses: dimension mismatch / bad input → 400,
+unknown collection → 404, duplicate create → 409, writes in read-only mode
+→ 403. Input limits are enforced (64 MiB body cap, k ≤ 1024, 10k points per
+batch).
+
+### Persistence & lifecycle
+
+Every collection maps to `<data_dir>/<name>.vex`. Snapshots found at
+startup are loaded as collections; writes mark a collection dirty; a
+background task (default every 30s), an explicit `POST .../snapshot`, and
+graceful shutdown (SIGTERM/ctrl-C) flush dirty collections back to disk
+with an atomic temp-file-and-rename. `--read-only` serves search over
+prebuilt snapshots with every write endpoint disabled — the dramatically
+simpler deployment when you don't need online writes.
+
+Concurrency model: collections sit behind `RwLock` — searches run
+concurrently, writes take the exclusive lock. `vex_core::search_batch`
+(rayon) parallelizes query batches over a frozen index.
+
+### Docker
 
 ```sh
+docker build -t vexdb .
+docker run -p 8080:8080 -v vexdata:/data vexdb
+```
+
+## The CLI
+
+```sh
+# Build a snapshot from JSONL ({"id": u64, "vector": [f32...], "payload": {...}?})
+cargo run --release -p vex-cli -- build \
+    --input data.jsonl --dim 128 --metric cosine --index hnsw --output index.vex
+
+# Query the snapshot (no rebuild)
+cargo run --release -p vex-cli -- query \
+    --snapshot index.vex --query 0.1,0.2,0.3 --k 10 --ef 128
+
+# Recall/QPS harness: flat ground truth vs HNSW across ef_search values
 cargo run --release -p vex-cli -- bench --n 100000 --dim 32 --queries 200 --k 10
 ```
 
-Sample output (synthetic uniform vectors, scalar distance kernels, single
-thread):
+## The engine (vex-core)
 
-```
-dataset: 100000 synthetic vectors, dim 32, 200 queries, k=10, metric L2
-build:   flat   17.465ms   hnsw(M=16, efc=200)    88.610s
-
- ef_search     recall@k          QPS    vs flat
-      flat        1.000          381       1.0x
-        10        0.431         9122      23.9x
-        20        0.602         5995      15.7x
-        40        0.773         3613       9.5x
-        80        0.916         1936       5.1x
-       160        0.973         1080       2.8x
-       320        0.995          574       1.5x
-```
-
-Two honest caveats on these numbers. First, *uniform* random vectors at high
-dimension are close to the worst case for any graph index — distances
-concentrate and there is no low-dimensional structure to navigate (at dim 128
-recall drops sharply; at dim 16 it is ~1.0 almost immediately). Real
-embedding datasets (SIFT, GloVe) have far lower intrinsic dimensionality,
-which is what the Phase 7 faiss comparison will use. Second, the speedup
-column understates HNSW: the scalar distance kernels (no SIMD until Phase 5)
-make the brute-force baseline artificially cheap to beat per-distance, and
-the gap widens with n.
-
-Criterion micro-benchmarks (insert throughput, query latency for both
-indexes at several scales):
-
-```sh
-cargo bench -p vex-core
-```
+- **`Index` trait** with one contract for every implementation: empty index
+  → zero results, `k > len()` clamps, `remove` is idempotent (`Ok(false)`
+  for missing ids), results sorted ascending by distance for every metric.
+- **`HnswIndex`** from the Malkov & Yashunin paper: exponential level
+  sampling, greedy upper-layer descent, ef-bounded beam search, Algorithm 4
+  neighbor selection with `keepPrunedConnections`. Arena storage (`u32`
+  neighbor indices into a flat node array). Deletes are tombstones: removed
+  nodes still route the beam but never surface.
+- **Filtered search happens during traversal**, not as a post-cull:
+  non-matching nodes route the beam but don't occupy result slots, so a 1%
+  filter widens the search instead of starving it (the Qdrant approach).
+- **Distance kernels**: cosine / L2 / dot, all normalized to
+  smaller-is-closer. Runtime-detected AVX2+FMA paths with
+  auto-vectorizable scalar fallbacks; the scalar versions are the oracle in
+  property tests (SIMD reorders FP summation, so equality is approximate).
+- **`.vex` snapshots**: hand-rolled little-endian format — magic bytes,
+  version field, then the arena dumped as flat arrays. Every length and
+  index read from disk is validated; corrupt or truncated files fail with a
+  typed error, never a panic. Round-trips are search-identical, including
+  tombstones and the RNG state (construction continues deterministically
+  after a load).
 
 ## Tests
 
@@ -123,8 +131,12 @@ cargo bench -p vex-core
 cargo test --workspace
 ```
 
-The suite includes property tests (via `proptest`) over both indexes and a
-recall@10 test for `HnswIndex` against `FlatIndex` ground truth.
+53 tests (the proptest ones each run 256 generated cases): unit + proptest
+invariants on both indexes, recall@10 against
+flat ground truth, SIMD-vs-scalar oracle properties, snapshot round-trip
+and corruption tests, CLI end-to-end runs, and HTTP API integration tests
+(CRUD, filters, error statuses, read-only mode, persistence across
+restart).
 
 ## Lint
 
@@ -132,3 +144,25 @@ recall@10 test for `HnswIndex` against `FlatIndex` ground truth.
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
+
+## Phases
+
+The project was built in checkpointed phases — each one shipped with tests
+and a "done when":
+
+1. **Foundation** — core types, metrics, `FlatIndex`, CLI, CI ✅
+2. **HNSW** — the graph index + recall harness ✅
+3. **Persistence** — the `.vex` snapshot format ✅
+4. **Concurrent reads** — `Arc`/`RwLock`, rayon `search_batch` ✅
+5. **Server v1** — read-only HTTP API over snapshots ✅
+6. **Writes over HTTP** — upsert/delete, flush lifecycle, input limits ✅
+7. **Metadata & filtering** — payloads + traversal-time filters ✅
+8. **SIMD** — AVX2 kernels, scalar oracle ✅
+9. **The faiss benchmark** — [BENCHMARKS.md](BENCHMARKS.md) ✅
+
+Future work, in rough order of payoff: batched/binary query protocol (the
+HTTP overhead measurement makes the case), mmap-backed snapshot loading,
+software prefetch in the beam search, NEON kernels, per-node locking for
+concurrent writes.
+
+Requires stable Rust 1.82+.

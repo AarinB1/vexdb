@@ -1,4 +1,5 @@
 use crate::error::Result;
+use crate::payload::{Filter, Payload};
 use crate::vector::{Vector, VectorId};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -25,13 +26,54 @@ pub struct SearchResult {
 ///   search results.
 /// - **Results** are sorted ascending by distance (smaller = more similar,
 ///   for every metric).
+/// - **Filtered search** only returns vectors whose payload matches the
+///   filter; vectors without a payload match only vacuous filters.
 pub trait Index {
-    fn add(&mut self, id: VectorId, vector: Vector) -> Result<()>;
+    fn add_with_payload(
+        &mut self,
+        id: VectorId,
+        vector: Vector,
+        payload: Option<Payload>,
+    ) -> Result<()>;
+
+    fn add(&mut self, id: VectorId, vector: Vector) -> Result<()> {
+        self.add_with_payload(id, vector, None)
+    }
+
     fn remove(&mut self, id: VectorId) -> Result<bool>;
-    fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>>;
+
+    fn search_filtered(
+        &self,
+        query: &[f32],
+        k: usize,
+        filter: Option<&Filter>,
+    ) -> Result<Vec<SearchResult>>;
+
+    fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
+        self.search_filtered(query, k, None)
+    }
+
+    /// The payload stored with a live vector, if any.
+    fn payload(&self, id: VectorId) -> Option<&Payload>;
+
     fn len(&self) -> usize;
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
     fn dim(&self) -> usize;
+}
+
+/// Run many queries in parallel across a thread pool. Reads on a frozen
+/// index are embarrassingly parallel — every `search` takes `&self`.
+///
+/// Requires the `rayon` feature (on by default; build vex-core with
+/// `default-features = false` for a dependency-lean embeddable core).
+#[cfg(feature = "rayon")]
+pub fn search_batch<I: Index + Sync>(
+    index: &I,
+    queries: &[Vec<f32>],
+    k: usize,
+) -> Result<Vec<Vec<SearchResult>>> {
+    use rayon::prelude::*;
+    queries.par_iter().map(|q| index.search(q, k)).collect()
 }
