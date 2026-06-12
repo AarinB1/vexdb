@@ -15,7 +15,7 @@ kernels, not the graph).
 | `vex-core`   | The engine: `FlatIndex` (exact), `HnswIndex` (approximate), distance metrics with AVX2 kernels, payload filters, `.vex` snapshot format. Synchronous, embeddable; `default-features = false` drops rayon for a lean build. |
 | `vex-cli`    | `vex` binary: `ingest`, `build` (JSONL → `.vex`), `query` (JSONL or snapshot), `bench` (recall/QPS harness). |
 | `vex-server` | `vex-server` binary: HTTP API + demo console over a directory of snapshots. All async deps (tokio/axum/tower) are isolated here. |
-| `vex-wasm`   | wasm-bindgen bindings: the whole engine compiled to a 275 KB WebAssembly module. Powers the landing-page demo — snapshot loading, HNSW search, and filters running entirely in the browser. |
+| `vex-wasm`   | wasm-bindgen bindings: the whole engine compiled to a 289 KB WebAssembly module. Powers the landing-page demo — snapshot loading, HNSW search, filters, traversal traces, and the exact-scan recall oracle, all running in the browser. |
 
 ## The browser demo (no server)
 
@@ -27,6 +27,23 @@ lazy-load the same MiniLM model via transformers.js so the query embeds
 locally too. Measured in-browser: snapshot parse ~50 ms, HNSW search ~2–4 ms,
 query embedding ~200 ms. There is no backend — search, filters, and the
 snapshot parser are the same Rust code paths as the native build.
+
+Two things on the page go beyond a typical demo:
+
+- **The search X-ray.** Every search calls `searchTrace` (the engine's
+  `search_traced` through wasm) and animates the *actual* traversal over a
+  PCA projection of all 5,000 embeddings — fitted by power iteration in the
+  tab (~0.5 s, `docs/demo/viz.js`), no precomputed layout. You watch the
+  greedy descent through the upper layers, the ef-wide beam spreading over
+  layer 0, and — with a genre filter on — hundreds of orange "routed" nodes:
+  filtered-out vectors steering the beam without taking result slots.
+  Dragging the `ef` slider re-runs the search and visibly widens the beam,
+  and an explain strip reports visited nodes, distance evals, and hop counts
+  from the trace.
+- **The recall lab.** One click brute-forces the exact top-10
+  (`searchExact`), sweeps `ef`, and charts measured recall@10 against
+  measured latency — a small ann-benchmarks-style curve produced live on the
+  visitor's hardware, not copied from a README.
 
 Run it locally:
 
@@ -47,6 +64,13 @@ Node, bakes the snapshot with `vex build`):
 ```sh
 cd scripts && npm install && cd ..
 node scripts/build-demo-data.mjs --n 5000
+```
+
+Sanity-check the shipped demo artifacts (wasm pkg + snapshot + viz math)
+without opening a browser:
+
+```sh
+node scripts/smoke-demo.mjs
 ```
 
 ## Quick start: the server
@@ -147,6 +171,13 @@ cargo run --release -p vex-cli -- bench --n 100000 --dim 32 --queries 200 --k 10
 - **Filtered search happens during traversal**, not as a post-cull:
   non-matching nodes route the beam but don't occupy result slots, so a 1%
   filter widens the search instead of starving it (the Qdrant approach).
+- **Tracing and ground truth built in**: `search_traced` returns the same
+  results as `search` plus a full record of the traversal (descent hops,
+  every beam evaluation with its admitted/routed/rejected verdict, work
+  counters) — the plain search path threads a no-op sink through the same
+  code, so tracing costs nothing unless asked for. `search_exact` is the
+  brute-force oracle for measuring the index's own recall. Both power the
+  landing-page X-ray.
 - **Distance kernels**: cosine / L2 / dot, all normalized to
   smaller-is-closer. Runtime-detected AVX2+FMA paths with
   auto-vectorizable scalar fallbacks; the scalar versions are the oracle in
@@ -164,12 +195,14 @@ cargo run --release -p vex-cli -- bench --n 100000 --dim 32 --queries 200 --k 10
 cargo test --workspace
 ```
 
-53 tests (the proptest ones each run 256 generated cases): unit + proptest
-invariants on both indexes, recall@10 against
-flat ground truth, SIMD-vs-scalar oracle properties, snapshot round-trip
-and corruption tests, CLI end-to-end runs, and HTTP API integration tests
-(CRUD, filters, error statuses, read-only mode, persistence across
-restart).
+67 tests (the proptest ones each run 256 generated cases): unit + proptest
+invariants on both indexes, recall@10 against flat ground truth,
+SIMD-vs-scalar oracle properties, snapshot round-trip and corruption tests,
+trace-vs-plain-search equivalence and trace invariants, exact-scan-vs-flat
+agreement, CLI end-to-end runs, and HTTP API integration tests (CRUD,
+filters, error statuses, read-only mode, persistence across restart).
+`scripts/smoke-demo.mjs` additionally exercises the built wasm pkg, the
+demo snapshot, and the projection math in Node.
 
 ## Lint
 
@@ -193,6 +226,10 @@ and a "done when":
 8. **SIMD** — AVX2 kernels, scalar oracle ✅
 9. **The faiss benchmark** — [BENCHMARKS.md](BENCHMARKS.md) ✅
 10. **The browser build** — vex-wasm + the in-tab semantic search demo ✅
+11. **The X-ray** — zero-cost trace instrumentation (`search_traced`), the
+    exact-scan recall oracle (`search_exact`), and a landing page that
+    animates the real traversal and measures live recall curves in the
+    visitor's tab ✅
 
 Future work, in rough order of payoff: batched/binary query protocol (the
 HTTP overhead measurement makes the case), mmap-backed snapshot loading,

@@ -100,6 +100,16 @@ impl AnyIndex {
         }
     }
 
+    /// Iterate `(id, vector, payload)` over live vectors in storage order.
+    pub fn iter_live(
+        &self,
+    ) -> Box<dyn Iterator<Item = (VectorId, &Vector, Option<&Payload>)> + '_> {
+        match self {
+            AnyIndex::Flat(i) => Box::new(i.iter_live()),
+            AnyIndex::Hnsw(i) => Box::new(i.iter_live()),
+        }
+    }
+
     /// Search with optional per-query beam width and filter. `ef` is only
     /// meaningful for HNSW; flat search is exact and ignores it.
     pub fn search_opts(

@@ -44,6 +44,28 @@ export class VexIndex {
         return ret >>> 0;
     }
     /**
+     * Ids of every live vector in storage order (a `BigUint64Array`),
+     * parallel to `exportVectors`.
+     * @returns {BigUint64Array}
+     */
+    exportIds() {
+        const ret = wasm.vexindex_exportIds(this.__wbg_ptr);
+        var v1 = getArrayU64FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+        return v1;
+    }
+    /**
+     * Every live vector as one flat dim-strided `Float32Array`, in
+     * `exportIds` order — one copy across the wasm boundary instead of n.
+     * @returns {Float32Array}
+     */
+    exportVectors() {
+        const ret = wasm.vexindex_exportVectors(this.__wbg_ptr);
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
      * Load an index from `.vex` snapshot bytes (e.g. a `fetch`ed file).
      * @param {Uint8Array} bytes
      * @returns {VexIndex}
@@ -116,6 +138,47 @@ export class VexIndex {
         var ptr1 = isLikeNone(filter_json) ? 0 : passStringToWasm0(filter_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         var len1 = WASM_VECTOR_LEN;
         const ret = wasm.vexindex_search(this.__wbg_ptr, ptr0, len0, k, ef, ptr1, len1);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
+     * Exact top-k by brute-force scan over every live vector — ground
+     * truth for measuring HNSW recall in the page itself.
+     * @param {Float32Array} query
+     * @param {number} k
+     * @param {string | null} [filter_json]
+     * @returns {any}
+     */
+    searchExact(query, k, filter_json) {
+        const ptr0 = passArrayF32ToWasm0(query, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        var ptr1 = isLikeNone(filter_json) ? 0 : passStringToWasm0(filter_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len1 = WASM_VECTOR_LEN;
+        const ret = wasm.vexindex_searchExact(this.__wbg_ptr, ptr0, len0, k, ptr1, len1);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
+     * Like `search`, but also returns the full traversal record:
+     * `{hits, trace: {entry_id, max_layer, descent, beam, visited,
+     * distance_evals}}`. The hits are identical to `search` with the same
+     * arguments — the trace observes the traversal, it never alters it.
+     * @param {Float32Array} query
+     * @param {number} k
+     * @param {number} ef
+     * @param {string | null} [filter_json]
+     * @returns {any}
+     */
+    searchTrace(query, k, ef, filter_json) {
+        const ptr0 = passArrayF32ToWasm0(query, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        var ptr1 = isLikeNone(filter_json) ? 0 : passStringToWasm0(filter_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len1 = WASM_VECTOR_LEN;
+        const ret = wasm.vexindex_searchTrace(this.__wbg_ptr, ptr0, len0, k, ef, ptr1, len1);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }
@@ -272,9 +335,22 @@ function getArrayF32FromWasm0(ptr, len) {
     return getFloat32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
 }
 
+function getArrayU64FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getBigUint64ArrayMemory0().subarray(ptr / 8, ptr / 8 + len);
+}
+
 function getArrayU8FromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
+}
+
+let cachedBigUint64ArrayMemory0 = null;
+function getBigUint64ArrayMemory0() {
+    if (cachedBigUint64ArrayMemory0 === null || cachedBigUint64ArrayMemory0.byteLength === 0) {
+        cachedBigUint64ArrayMemory0 = new BigUint64Array(wasm.memory.buffer);
+    }
+    return cachedBigUint64ArrayMemory0;
 }
 
 let cachedDataViewMemory0 = null;
@@ -400,6 +476,7 @@ function __wbg_finalize_init(instance, module) {
     wasmInstance = instance;
     wasm = instance.exports;
     wasmModule = module;
+    cachedBigUint64ArrayMemory0 = null;
     cachedDataViewMemory0 = null;
     cachedFloat32ArrayMemory0 = null;
     cachedUint8ArrayMemory0 = null;
