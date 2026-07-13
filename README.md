@@ -1,5 +1,7 @@
 # vexdb
 
+**[▶ Live demo](https://aarinb1.github.io/vexdb/)** — 5,000 movie embeddings, HNSW search, and the traversal X-ray running in your browser.
+
 A vector database written in Rust, from scratch — no faiss bindings, no
 black boxes. A hand-rolled HNSW index, binary snapshot persistence, payload
 filtering during graph traversal, SIMD distance kernels, and a Qdrant-style
@@ -19,7 +21,7 @@ kernels, not the graph).
 
 ## The browser demo (no server)
 
-The landing page (`docs/index.html`, GitHub Pages-ready) embeds a live demo:
+The landing page ([`docs/index.html`](https://aarinb1.github.io/vexdb/), live on GitHub Pages) embeds a live demo:
 vex-core compiled to WebAssembly, searching **5,000 movie-plot embeddings**
 (all-MiniLM-L6-v2, 384-dim, cosine) inside the visitor's tab. "Surprise me"
 and "more like this" use stored vectors and need no model; typed queries
