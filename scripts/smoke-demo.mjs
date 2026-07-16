@@ -6,6 +6,10 @@
 // Run it after rebuilding vex-wasm or regenerating the demo data; it loads
 // the exact artifacts the landing page fetches and asserts the demo's
 // invariants (trace == search, exact-scan oracle, projection sanity).
+//
+// TODO: this reads the snapshot from disk and does NOT exercise the browser's
+// fetch/decode path (fetchWithProgress, Content-Encoding: gzip on Pages), which
+// is why a boot-time buffer overflow on gzipped movies.vex passed this check.
 
 import { readFile } from "node:fs/promises";
 import assert from "node:assert/strict";

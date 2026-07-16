@@ -1353,21 +1353,29 @@ build:   flat   23.0ms   hnsw(M=16, efc=200)   48.4s
   const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const nextPaint = () => new Promise(r => setTimeout(r, 30));
 
-  async function fetchWithProgress(url, onPct) {
+  async function fetchWithProgress(url, onProgress) {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`fetch ${url}: ${res.status}`);
-    const total = +res.headers.get("content-length") || 0;
-    if (!res.body || !total) return new Uint8Array(await res.arrayBuffer());
-    const reader = res.body.getReader();
-    const buf = new Uint8Array(total);
+    const reader = res.body && res.body.getReader ? res.body.getReader() : null;
+    if (!reader) return new Uint8Array(await res.arrayBuffer());
+    // Content-Length is only a usable total when the body isn't transfer-decoded.
+    // GitHub Pages serves movies.vex with Content-Encoding: gzip, so the header
+    // is the compressed size while the stream yields the larger decoded bytes —
+    // sizing a buffer from it overflows. Accumulate chunks and size from actual
+    // bytes received; fall back to a byte-count readout when there's no total.
+    const total = res.headers.get("content-encoding") ? 0 : (+res.headers.get("content-length") || 0);
+    const chunks = [];
     let got = 0;
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      buf.set(value, got);
+      chunks.push(value);
       got += value.length;
-      onPct(got / total * 100);
+      onProgress(total ? { pct: got / total * 100, got } : { pct: null, got });
     }
+    const buf = new Uint8Array(got);
+    let off = 0;
+    for (const c of chunks) { buf.set(c, off); off += c.length; }
     return buf;
   }
 
@@ -1383,7 +1391,14 @@ build:   flat   23.0ms   hnsw(M=16, efc=200)   48.4s
 
       status.textContent = "downloading movies.vex…";
       const bytes = await fetchWithProgress("./demo/movies.vex",
-        pct => { prog.firstElementChild.style.width = pct + "%"; status.textContent = `downloading movies.vex… ${pct.toFixed(0)}%`; });
+        p => {
+          if (p.pct !== null) {
+            prog.firstElementChild.style.width = p.pct + "%";
+            status.textContent = `downloading movies.vex… ${p.pct.toFixed(0)}%`;
+          } else {
+            status.textContent = `downloading movies.vex… ${(p.got / 1e6).toFixed(1)} MB`;
+          }
+        });
 
       const meta = await (await fetch("./demo/meta.json")).json();
 
